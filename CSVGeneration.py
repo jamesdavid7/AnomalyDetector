@@ -1,5 +1,7 @@
 import csv
+import os
 import random
+import boto3
 from datetime import datetime, timedelta
 from faker import Faker
 
@@ -47,3 +49,18 @@ with open(output_file, mode="w", newline="", encoding="utf-8") as file:
     writer.writerows(records)
 
 print(f"CSV file '{output_file}' generated successfully with 1000 records.")
+
+# ---------- Step 2: Upload to S3 ----------
+# Replace with your values
+bucket_name = 'ipl-anomalydetector'
+s3_key = f'inputdata/{os.path.basename(output_file)}'  # key = S3 path
+
+# Initialize boto3 S3 client
+s3 = boto3.client('s3')
+
+# Upload
+try:
+    s3.upload_file(output_file, bucket_name, s3_key)
+    print(f"Uploaded '{output_file}' to 's3://{bucket_name}/{s3_key}'")
+except Exception as e:
+    print("Upload failed:", e)
