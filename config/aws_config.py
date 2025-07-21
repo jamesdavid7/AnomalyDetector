@@ -1,6 +1,26 @@
+import os
 import boto3
+from dotenv import load_dotenv
 
-def get_boto3_session(region_name='us-east-1'):
-    # If using IAM role or credentials are configured via environment/CLI
-    session = boto3.Session(region_name=region_name)
-    return session
+load_dotenv()
+
+class AWSConfig:
+    _session = None
+
+    @staticmethod
+    def _get_session():
+        if AWSConfig._session is None:
+            AWSConfig._session = boto3.Session(
+                aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+                aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+                region_name=os.getenv("AWS_DEFAULT_REGION")
+            )
+        return AWSConfig._session
+
+    @staticmethod
+    def get_s3_client():
+        return AWSConfig._get_session().client('s3')
+
+    @staticmethod
+    def get_dynamodb_resource():
+        return AWSConfig._get_session().resource('dynamodb')
