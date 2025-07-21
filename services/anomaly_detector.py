@@ -2,7 +2,7 @@ import pandas as pd
 import random
 import ipaddress
 from faker import Faker
-from datetime import datetime, timedelta
+from datetime import timedelta
 from geopy.distance import geodesic
 from sklearn.ensemble import IsolationForest, RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
@@ -11,11 +11,18 @@ from sklearn.metrics import classification_report
 import os
 from sklearn.preprocessing import MinMaxScaler
 
+from config.constatns import TABLE_ANOMALY_METRICS
+from dynamodb.metric_data import MetricDataRepo
+from models.metric import Metric
+from services.OpenAIAdvisor import analyze_transaction
+from collections import Counter
+from datetime import datetime, timezone
 
 def generate_and_process_data():
     fake = Faker()
     num_records = 1000
     REFERENCE_GEO = (12.9716, 77.5946)
+    output_dir = r"..\output"
 
     data = []
     for _ in range(num_records):
@@ -143,6 +150,8 @@ def generate_and_process_data():
     print("✅ Supervised Model Report:")
     print(classification_report(y_test, rf_model.predict(X_test_scaled)))
 
+    anomaly_output_file = os.path.join(output_dir, "transactions_with_anomalies.csv")
+
     # Arrange final output columns
     output_columns = [
         'transaction_id', 'account_id', 'customer_id', 'merchant_name', 'store_name',
@@ -156,12 +165,47 @@ def generate_and_process_data():
         'iso_anomaly', 'iso_score', 'rule_anomalies'
     ]
 
-    output_dir = "output"
     os.makedirs(output_dir, exist_ok=True)
-    output_file = os.path.join(output_dir, "transactions_with_anomalies.csv")
-    df[output_columns].to_csv(output_file, index=False)
-    return os.path.abspath(output_file)
+    df[output_columns].to_csv(anomaly_output_file, index=False)
+    print(f"✅ Anomaly data saved to: {anomaly_output_file}")
 
+    # Apply OpenAI LLM Analysis on first 10 records
+    df_to_analyze = df.head(10).copy()
+    advisory_output_cols = ["open_ai_anomaly", "anomaly_type","classification", "explanation", "suggested_action", "anomaly_score"]
+    df_to_analyze[advisory_output_cols] = df_to_analyze.apply(analyze_transaction, axis=1)
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Get current timestamp in YYYYMMDD_HHMMSS format
+    timestamp = datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H-%M-%S")
+
+    # Compose the filename with timestamp
+    filename = f"transactions_with_anomalies_{timestamp}.csv"
+
+    advisory_output_file = os.path.join(output_dir, filename)
+    df_to_analyze.to_csv(advisory_output_file, index=False)
+    print(f"🔍 OpenAI advisory saved at: {advisory_output_file}")
+
+    # Count the frequency of each anomaly type
+    counts = Counter(df_to_analyze['anomaly_type'])
+
+    # Construct the metric_data list
+    metric_data = [
+        {"anomaly_type": k, "count": v}
+        for k, v in counts.items()
+    ]
+
+    # Final dictionary
+    metric_dict = {
+        "file_name": filename,
+        "metric_data": metric_data
+    }
+
+    #sending metrics to dynamodb
+    metric = Metric.to_metric(metric_dict)
+    db = MetricDataRepo(TABLE_ANOMALY_METRICS)
+    db.insert_item(metric)
+
+    return advisory_output_file
 
 
 # Run and generate file
