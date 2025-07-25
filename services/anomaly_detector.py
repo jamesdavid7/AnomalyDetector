@@ -162,6 +162,8 @@ def generate_and_process_data():
     df[output_columns].to_csv(output_file, index=False)
     return os.path.abspath(output_file)
 
+
+
 # Run and generate file
 if __name__ == "__main__":
     path = generate_and_process_data()
