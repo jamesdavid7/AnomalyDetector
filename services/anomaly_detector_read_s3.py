@@ -118,14 +118,6 @@ def process_csv_from_s3(bucket, key):
 
     return output_key
 
-@app.route("/files/processAnomaly", methods=["POST"])
-def process_anomaly():
-    print("Inside this method process from lamda to reach this api cal")
-    data = request.get_json()
-    bucket = data["bucket"]
-    key = data["key"]
-    result_key = process_csv_from_s3(bucket, key)
-    return jsonify({"status": "success", "processed_key": result_key}), 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)

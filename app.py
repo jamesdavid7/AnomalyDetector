@@ -6,6 +6,8 @@ from dynamodb.metric_data import MetricDataRepo
 from models.metric import Metric
 from utils.s3_utils import S3Utils
 from services.csv_generation import save_transactions_to_csv
+from services.anomaly_detector_read_s3 import process_csv_from_s3  # <-- adjust if needed
+
 
 app = Flask(__name__)
 
@@ -66,6 +68,19 @@ def create_metric():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 400
+
+@app.route("/files/processAnomaly", methods=["POST"])
+def process_anomaly():
+    print("Inside this method process from lamda to reach this api cal")
+    try:
+        data = request.get_json(force=True)
+        bucket = data["bucket"]
+        key = data["key"]
+        result_key = process_csv_from_s3(bucket, key)
+        return jsonify({"status": "success", "processed_key": result_key}), 200
+    except Exception as e:
+        print("Error:", str(e))
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
     '''
