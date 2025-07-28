@@ -122,7 +122,7 @@ def process_csv_from_s3(bucket, key):
     df.to_csv(output_file, index=False)
 
     # Apply OpenAI LLM Analysis on first 10 records
-    df_to_analyze = df.head(2).copy()
+    df_to_analyze = df.head(12).copy()
     advisory_output_cols = ["open_ai_anomaly", "anomaly_type", "classification", "explanation", "suggested_action",
                             "anomaly_score"]
     df_to_analyze[advisory_output_cols] = df_to_analyze.apply(analyze_transaction, axis=1)
