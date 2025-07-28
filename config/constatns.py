@@ -5,4 +5,4 @@ TABLE_ANOMALY_METRICS = "anomaly_metrics"
 
 # Data Paths
 INPUT_DATA_DIR = "input"
-PROCESSED_DATA_DIR = "processed"
+PROCESSED_DATA_DIR = "output"
