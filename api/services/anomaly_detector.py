@@ -11,18 +11,20 @@ from sklearn.metrics import classification_report
 import os
 from sklearn.preprocessing import MinMaxScaler
 
-from config.constatns import TABLE_ANOMALY_METRICS
-from dynamodb.metric_data import MetricDataRepo
-from models.metric import Metric
-from services.OpenAIAdvisor import analyze_transaction
 from collections import Counter
 from datetime import datetime, timezone
+
+from api.config.constatns import TABLE_ANOMALY_METRICS
+from api.dynamodb.metric_data import MetricDataRepo
+from api.models.metric import Metric
+from api.services.OpenAIAdvisor import analyze_transaction
+
 
 def generate_and_process_data():
     fake = Faker()
     num_records = 1000
     REFERENCE_GEO = (12.9716, 77.5946)
-    output_dir = r"..\output"
+    output_dir = r"../output"
 
     data = []
     for _ in range(num_records):

@@ -1,13 +1,11 @@
 import os
-import json
 import tempfile
 from collections import Counter
 
 import pandas as pd
 import ipaddress
-from datetime import datetime
 from geopy.distance import geodesic
-from flask import Flask, request, jsonify
+from flask import Flask
 from sklearn.ensemble import IsolationForest, RandomForestClassifier
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.model_selection import train_test_split

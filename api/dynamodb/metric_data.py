@@ -1,7 +1,7 @@
 from botocore.exceptions import ClientError
 
-from config.aws_config import AWSConfig
-from models.metric import Metric
+from api.config.aws_config import AWSConfig
+from api.models.metric import Metric
 
 
 class MetricDataRepo:

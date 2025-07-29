@@ -1,0 +1,26 @@
+
+services:
+  api:
+    build:
+      context: ./api
+    container_name: flask_api
+    ports:
+      - "5000:5000"
+    networks:
+      - backend
+
+  dashboard:
+    build:
+      context: ./streamlit
+    container_name: streamlit_ui
+    ports:
+      - "8501:8501"
+    depends_on:
+      - api
+    networks:
+      - backend
+    environment:
+      - API_URL=http://api:5000
+
+networks:
+  backend:
