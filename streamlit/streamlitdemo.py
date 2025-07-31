@@ -11,7 +11,7 @@ API_BASE = os.getenv("API_URL", "http://flask_api:5000")
 METRICS_ENDPOINT = f"{API_BASE}/metrics"
 DOWNLOAD_ENDPOINT = f"{API_BASE}/download"
 
-@st.cache_data(ttl=60)
+# @st.cache_data(ttl=60)
 def fetch_metrics():
     try:
         response = requests.get(METRICS_ENDPOINT)
