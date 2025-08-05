@@ -24,3 +24,8 @@ class AWSConfig:
     @staticmethod
     def get_dynamodb_resource():
         return AWSConfig._get_session().resource('dynamodb')
+
+    #Simple Email Service (AWS SES) Client
+    @staticmethod
+    def get_ses_client():
+        return AWSConfig._get_session().client('ses')
