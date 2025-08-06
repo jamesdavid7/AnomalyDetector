@@ -1,5 +1,6 @@
 from flask import Flask, jsonify, send_file, request
 
+from api.utils import ses_utils
 from services.anomaly_detector import generate_and_process_data
 from config.constatns import S3_BUCKET_NAME, PROCESSED_DATA_DIR, TABLE_ANOMALY_METRICS, INPUT_DATA_DIR
 from dynamodb.metric_data import MetricDataRepo
@@ -19,6 +20,7 @@ def run_detection():
     output_path = generate_and_process_data()
     s3_utils = S3Utils(bucket_name=S3_BUCKET_NAME)
     filename = s3_utils.send_file_to_s3(output_path, PROCESSED_DATA_DIR)
+    ses_utils.process_and_send_file(output_path)
     return jsonify({
         "file_name": filename,
         "message": "Anomaly report generated successfully."
