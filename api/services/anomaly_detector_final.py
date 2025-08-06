@@ -1,10 +1,10 @@
-import csv
 import random
 import uuid
-import pandas as pd
 from datetime import datetime, timedelta
+
+import pandas as pd
 from faker import Faker
-from sklearn.ensemble import IsolationForest
+from sklearn.ensemble import RandomForestClassifier, IsolationForest
 from sklearn.preprocessing import MinMaxScaler
 
 fake = Faker()
@@ -175,6 +175,9 @@ features = df[[
     'currency_mismatch_flag', 'status_fail_flag', 'charge_percent', 'amount_per_minute'
 ]].fillna(0)
 
+# ✅ Create labels for supervised training
+labels = df['is_anomaly_suspected_supervised'].astype(int)
+
 # Isolation Forest
 iso_model = IsolationForest(contamination=0.25, n_estimators=300, random_state=42)
 predictions = iso_model.fit_predict(features)
@@ -195,9 +198,8 @@ def get_unsupervised_reason(row):
     if row['amount_per_minute'] > 100: reasons.append('high_amount_per_minute')
     return random.choice(reasons) if reasons else 'normal'
 
-df['iso_anomaly_reason'] = df.apply(lambda row: get_unsupervised_reason(row) if row['iso_anomaly'] else 'normal', axis=1)
-
-# Save
+df['iso_anomaly_reason'] = df.apply(lambda row: get_unsupervised_reason(row)
+if row['iso_anomaly'] else 'normal', axis=1)
 final_csv = 'synthetic_transactions_processed_v2.csv'
 df.to_csv(final_csv, index=False)
-print("✅ Final dataset saved:", final_csv)
+print(" Final dataset saved:", final_csv)
