@@ -8,3 +8,4 @@ geopy==2.4.1
 faker==25.2.0
 gunicorn
 python-dotenv
+openai

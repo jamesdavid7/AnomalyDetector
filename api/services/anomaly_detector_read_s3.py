@@ -1,16 +1,23 @@
 import os
-import json
 import tempfile
+from collections import Counter
+
 import pandas as pd
 import ipaddress
-from datetime import datetime
 from geopy.distance import geodesic
-from flask import Flask, request, jsonify
+from flask import Flask
 from sklearn.ensemble import IsolationForest, RandomForestClassifier
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
+from datetime import datetime, timezone
+
 import boto3
+
+from config.constatns import TABLE_ANOMALY_METRICS
+from dynamodb.metric_data import MetricDataRepo
+from models.metric import Metric
+from services.OpenAIAdvisor import analyze_transaction
 
 app = Flask(__name__)
 
@@ -57,8 +64,10 @@ def process_csv_from_s3(bucket, key):
 
     # Download file from S3
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
-        s3.download_file(bucket, key, tmp.name)
-        df = pd.read_csv(tmp.name)
+        temp_file_path = tmp.name
+
+    s3.download_file(bucket, key, temp_file_path)
+    df = pd.read_csv(temp_file_path)
 
     df = preprocess(df)
     df['rule_anomalies'] = df.apply(lambda row: detect_rule_anomalies(row), axis=1)
@@ -112,8 +121,43 @@ def process_csv_from_s3(bucket, key):
     output_file = os.path.join(tempfile.gettempdir(), "transactions_with_anomalies.csv")
     df.to_csv(output_file, index=False)
 
-    output_key = "output/transactions_with_anomalies.csv"
-    s3.upload_file(output_file, bucket, output_key)
+    # Apply OpenAI LLM Analysis on first 10 records
+    df_to_analyze = df.head(2).copy()
+    advisory_output_cols = ["open_ai_anomaly", "anomaly_type", "classification", "explanation", "suggested_action",
+                            "anomaly_score"]
+    df_to_analyze[advisory_output_cols] = df_to_analyze.apply(analyze_transaction, axis=1)
+
+    # Get current timestamp in YYYYMMDD_HHMMSS format
+    timestamp = datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H-%M-%S")
+
+    filename = f"transactions_with_anomalies_{timestamp}.csv"
+    output_key = f"output/{filename}"
+
+    advisory_output_file = os.path.join(tempfile.gettempdir(), filename)
+    df_to_analyze.to_csv(advisory_output_file, index=False)
+    print(f"🔍 OpenAI advisory saved at: {advisory_output_file}")
+
+    # Count the frequency of each anomaly type
+    counts = Counter(df_to_analyze['anomaly_type'])
+
+    # Construct the metric_data list
+    metric_data = [
+        {"anomaly_type": k, "count": v}
+        for k, v in counts.items()
+    ]
+
+    # Final dictionary
+    metric_dict = {
+        "file_name": filename,
+        "metric_data": metric_data
+    }
+
+    # sending metrics to dynamodb
+    metric = Metric.to_metric(metric_dict)
+    db = MetricDataRepo(TABLE_ANOMALY_METRICS)
+    db.insert_item(metric)
+
+    s3.upload_file(advisory_output_file, bucket, output_key)
     print(f"✅ Uploaded to s3://{bucket}/{output_key}")
 
     return output_key
