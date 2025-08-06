@@ -1,7 +1,7 @@
 from botocore.exceptions import ClientError
 
 from config.aws_config import AWSConfig
-from models.metric import Metric
+from dynamodb.metric import Metric
 
 
 class MetricDataRepo:
