@@ -3,7 +3,7 @@ from io import BytesIO
 
 from botocore.exceptions import ClientError
 
-from  config.aws_config import AWSConfig
+from  api.config.aws_config import AWSConfig
 
 
 class S3Utils:

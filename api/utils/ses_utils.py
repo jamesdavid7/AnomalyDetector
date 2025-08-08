@@ -4,8 +4,8 @@ from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+import msoffcrypto
 import pandas as pd
-import win32com.client as win32
 
 from api.config.aws_config import AWSConfig
 from api.config.constatns import PROCESSED_DATA_DIR
@@ -78,26 +78,18 @@ def convert_csv_to_excel(csv_path, excel_path):
     print(f"✅ Conversion successful! Excel saved at {excel_path}")
 
 def set_password_on_excel(excel_path, password):
-    """ Set open password on the Excel file (Windows only, Flask/thread-safe) """
-    import pythoncom
-    pythoncom.CoInitialize()  # ✅ Ensure COM is initialized in this thread
 
-    try:
-        """ Set password on the Excel file (Windows only) """
-        print(f"Setting password on Excel file: {excel_path}")
-        excel = win32.Dispatch('Excel.Application')
-        excel.Visible = False  # Don't show Excel window
-        wb = excel.Workbooks.Open(excel_path)
-        temp_path = excel_path.replace(".xlsx", "_protected.xlsx")
-        wb.SaveAs(temp_path, FileFormat=51, Password=password)
-        wb.Close()
-        excel.Quit()
-        # Replace original with password-protected file
-        os.remove(excel_path)
-        shutil.move(temp_path, excel_path)
-        print(f"✅ Password set and file replaced: {excel_path}")
-    finally:
-        pythoncom.CoUninitialize()  # ✅ Always uninitialize COM
+    output_path = os.path.join(BASE_DIR, PROCESSED_DATA_DIR, "temp_pwd" + ".xlsx")
+    with open(excel_path, 'rb') as f_in:
+        office_file = msoffcrypto.OfficeFile(f_in)
+        # office_file.load_key()  # no password needed to load unencrypted file
+        with open(output_path, 'wb') as f_out:
+            office_file.encrypt(password,f_out)
+    print(f"✅ Password set on file: {output_path}")
+
+    # Replace original with password-protected file
+    os.remove(excel_path)
+    shutil.move(output_path, excel_path)
 
 # === EXECUTE ===
 if __name__ == "__main__":
