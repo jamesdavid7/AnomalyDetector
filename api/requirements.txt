@@ -9,3 +9,4 @@ faker==25.2.0
 gunicorn
 python-dotenv
 openai
+msoffcrypto-tool
