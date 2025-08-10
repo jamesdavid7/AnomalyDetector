@@ -8,6 +8,7 @@ from models.metric import Metric
 from utils.s3_utils import S3Utils
 from services.csv_generation import save_transactions_to_csv
 from services.anomaly_detector_read_s3 import process_csv_from_s3  # <-- adjust if needed
+from threading import Thread
 
 
 app = Flask(__name__)
@@ -80,6 +81,20 @@ def process_anomaly():
         key = data["key"]
         result_key = process_csv_from_s3(bucket, key)
         return jsonify({"status": "success", "processed_key": result_key}), 200
+    except Exception as e:
+        print("Error:", str(e))
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route("/files/processAnomaly/bg", methods=["POST"])
+def process_anomaly_bg():
+    print("Inside this method process from lamda to reach this api cal bg")
+    try:
+        data = request.get_json(force=True)
+        bucket = data["bucket"]
+        key = data["key"]
+        thread = Thread(target=process_csv_from_s3, args=(bucket, key))
+        thread.start()
+        return "Task started", 202
     except Exception as e:
         print("Error:", str(e))
         return jsonify({"status": "error", "message": str(e)}), 500
