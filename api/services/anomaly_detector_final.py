@@ -1,3 +1,4 @@
+import os
 import random
 import uuid
 from datetime import datetime, timedelta
@@ -7,6 +8,12 @@ from faker import Faker
 from sklearn.ensemble import RandomForestClassifier, IsolationForest
 from sklearn.preprocessing import MinMaxScaler
 
+from api.config.constatns import TABLE_ANOMALY_METRICS
+from api.dynamodb.metric_data import MetricDataRepo
+from api.models.metric import Metric
+from api.services.OpenAIAdvisor import analyze_transaction
+from collections import Counter
+from datetime import datetime, timezone
 fake = Faker()
 
 # Parameters
@@ -203,3 +210,40 @@ if row['iso_anomaly'] else 'normal', axis=1)
 final_csv = 'synthetic_transactions_processed_v2.csv'
 df.to_csv(final_csv, index=False)
 print(" Final dataset saved:", final_csv)
+
+# Apply OpenAI LLM Analysis on first 10 records
+output_dir = r"../output"
+df_to_analyze = df.head(10).copy()
+advisory_output_cols = ["open_ai_anomaly", "anomaly_type","classification", "explanation", "suggested_action", "anomaly_score"]
+df_to_analyze[advisory_output_cols] = df_to_analyze.apply(analyze_transaction, axis=1)
+os.makedirs(output_dir, exist_ok=True)
+
+# Get current timestamp in YYYYMMDD_HHMMSS format
+timestamp = datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H-%M-%S")
+
+# Compose the filename with timestamp
+filename = f"transactions_with_anomalies_{timestamp}.csv"
+
+advisory_output_file = os.path.join(output_dir, filename)
+df_to_analyze.to_csv(advisory_output_file, index=False)
+print(f"🔍 OpenAI advisory saved at: {advisory_output_file}")
+
+# Count the frequency of each anomaly type
+counts = Counter(df_to_analyze['anomaly_type'])
+
+# Construct the metric_data list
+metric_data = [
+    {"anomaly_type": k, "count": v}
+    for k, v in counts.items()
+]
+
+# Final dictionary
+metric_dict = {
+    "file_name": filename,
+    "metric_data": metric_data
+}
+
+#sending metrics to dynamodb
+metric = Metric.to_metric(metric_dict)
+db = MetricDataRepo(TABLE_ANOMALY_METRICS)
+db.insert_item(metric)

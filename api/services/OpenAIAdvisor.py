@@ -67,7 +67,6 @@ def analyze_transaction(row):
     - Created At: {row['created_at']}
     - IS Anomaly suspected supervised: {row['is_anomaly_suspected_supervised']}
     - IS Anomaly suspected Unsupervised: {row['is_anomaly_suspected_UnSupervised']}
-    - Geo Distance KM: {row['geo_distance_km']}
     - Rule Anomalies: {row['rule_anomalies']}
     
     Respond in this JSON format:
