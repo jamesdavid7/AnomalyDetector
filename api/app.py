@@ -60,7 +60,7 @@ def uploadFile():
     })
 
 @app.route('/anomalies/import', methods=['GET'])
-def uploadFile():
+def uploadFileS3():
     output_path = generate_dataset()
     s3_utils = S3Utils(bucket_name=S3_BUCKET_NAME)
     filename = s3_utils.send_file_to_s3(output_path, INPUT_DATA_DIR)
@@ -201,6 +201,7 @@ def feature_anomaly_reason(txn, features):
 
         # Only join if there are reasons
     return "; ".join(reasons) if reasons else None
+
 @app.route("/transactions/detect-anomaly", methods=["POST"])
 def detect_single_anomaly():
     try:
