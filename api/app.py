@@ -8,10 +8,12 @@ from models.metric import Metric
 from utils.s3_utils import S3Utils
 from services.csv_generation import save_transactions_to_csv
 from services.anomaly_detector_read_s3 import process_csv_from_s3  # <-- adjust if needed
+from services.CSVGenerator import generate_dataset
 from threading import Thread
 import joblib
 import pandas as pd
 from services.anomaly_rules import anomaly_rules, add_anomaly
+from services.anomaly_detector_updated import process_csv_from_s3
 
 
 app = Flask(__name__)
@@ -57,6 +59,16 @@ def uploadFile():
         "message": "Input file uploaded successfully."
     })
 
+@app.route('/anomalies/import', methods=['GET'])
+def uploadFile():
+    output_path = generate_dataset()
+    s3_utils = S3Utils(bucket_name=S3_BUCKET_NAME)
+    filename = s3_utils.send_file_to_s3(output_path, INPUT_DATA_DIR)
+    return jsonify({
+        "file_name": filename,
+        "message": "Input file uploaded successfully."
+    })
+
 @app.route('/download/<file_name>', methods=['GET'])
 def download_file(file_name):
     s3_utils = S3Utils(bucket_name=S3_BUCKET_NAME)
@@ -92,6 +104,21 @@ def create_metric():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 400
+
+"""
+@app.route("/files/processAnomaly", methods=["POST"])
+def process_anomaly():
+    print("Inside this method process from lamda to reach this api cal")
+    try:
+        data = request.get_json(force=True)
+        bucket = data["bucket"]
+        key = data["key"]
+        result_key = process_csv_from_s3(bucket, key)
+        return jsonify({"status": "success", "processed_key": result_key}), 200
+    except Exception as e:
+        print("Error:", str(e))
+        return jsonify({"status": "error", "message": str(e)}), 500
+"""
 
 @app.route("/files/processAnomaly", methods=["POST"])
 def process_anomaly():
@@ -234,6 +261,6 @@ def detect_single_anomaly():
 
 if __name__ == '__main__':
 
-    app.run(debug=True)
+  #  app.run(debug=True)
 
-    #app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True)
