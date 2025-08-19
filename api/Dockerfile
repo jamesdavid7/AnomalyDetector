@@ -1,4 +1,4 @@
-# Use official Python slim image
+# Use slim Python image
 FROM python:3.11-slim
 
 # Set environment variables
@@ -6,31 +6,26 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
-# Set working directory
 WORKDIR /app
 
-# Install system dependencies in a single step to avoid cache issues
+# Install only required system dependencies for psycopg2-binary and HTTPS
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        gcc \
         libpq-dev \
         ca-certificates \
-        build-essential \
         apt-transport-https \
+        wget \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install Python dependencies
+# Copy Python requirements and install
 COPY requirements.txt .
 RUN pip install --upgrade pip \
     && pip install -r requirements.txt
 
-# Copy the entire API folder
+# Copy entire API folder
 COPY . /app/api
-
-# Set working directory to API folder
 WORKDIR /app/api
 
-# Expose the application port
 EXPOSE 5000
 
 # Run the application with Gunicorn
