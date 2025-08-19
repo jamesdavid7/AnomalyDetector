@@ -11,3 +11,4 @@ python-dotenv
 openai
 msoffcrypto-tool
 openpyxl
+shap
