@@ -1,23 +1,21 @@
 import os
+import random
 import tempfile
 from collections import Counter
-
-import pandas as pd
-import ipaddress
-from geopy.distance import geodesic
-from flask import Flask
-from sklearn.ensemble import IsolationForest, RandomForestClassifier
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report
 from datetime import datetime, timezone
 
 import boto3
-
-from config.constatns import TABLE_ANOMALY_METRICS
-from dynamodb.metric_data import MetricDataRepo
-from models.metric import Metric
-from services.OpenAIAdvisor import analyze_transaction
+import pandas as pd
+# Your imports for metric & OpenAI advisory
+from api.config.constatns import TABLE_ANOMALY_METRICS
+from api.dynamodb.metric_data import MetricDataRepo
+from api.models.metric import Metric
+from api.services.OpenAIAdvisor import analyze_transaction
+from flask import Flask
+from sklearn.ensemble import IsolationForest, RandomForestClassifier
+from sklearn.metrics import classification_report
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 app = Flask(__name__)
 
@@ -44,8 +42,6 @@ def process_csv_from_s3(bucket, key):
     s3.download_file(bucket, key, temp_file_path)
     df = pd.read_csv(temp_file_path)
 
-    df['rule_anomalies'] = df.apply(lambda row: detect_rule_anomalies(row), axis=1)
-
     df['has_high_amount'] = df['amount'] > 5000
     df['has_long_duration'] = df['duration_sec'] > 300
     df['has_odd_hour'] = df['hour'].isin(range(0, 5))
@@ -53,6 +49,9 @@ def process_csv_from_s3(bucket, key):
     df['has_geo_far'] = df['geo_distance_km'] > 1000
     df['has_status_fail'] = df['transaction_status'] != 'SUCCESS'
     df['is_anomaly_suspected_supervised'] = df['rule_anomalies'].apply(lambda x: len(x) >= 3)
+
+
+    df['rule_anomalies'] = df.apply(lambda row: detect_rule_anomalies(row), axis=1)
 
     features_unsup = ['amount', 'duration_sec', 'hour', 'day_of_week', 'months_to_expiry', 'geo_distance_km']
     X_unsup = df[features_unsup].fillna(0)
