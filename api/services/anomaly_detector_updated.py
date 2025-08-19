@@ -22,6 +22,18 @@ from services.OpenAIAdvisor import analyze_transaction
 app = Flask(__name__)
 
 REFERENCE_GEO = (12.9716, 77.5946)
+
+def detect_rule_anomalies(row):
+    anomalies = []
+    if row['anomaly_type'] != "NORMAL":
+        return row['anomaly_type']  # Known injected anomaly type
+    if row['has_high_amount']: anomalies.append("high_amount")
+    if row['has_long_duration']: anomalies.append("long_duration")
+    if row['has_odd_hour']: anomalies.append("odd_hour")
+    if row['has_expiring_card']: anomalies.append("card_expiring_soon")
+    if row['has_geo_far']: anomalies.append("geo_far")
+    return random.choice(anomalies) if anomalies else "none"
+
 def process_csv_from_s3(bucket, key):
     s3 = boto3.client("s3")
 
