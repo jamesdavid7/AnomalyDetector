@@ -1,7 +1,8 @@
-from dataclasses import dataclass, field
+import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Dict, Any
-import uuid
+
 
 @dataclass
 class MetricData:

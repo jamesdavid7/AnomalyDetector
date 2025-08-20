@@ -1,20 +1,23 @@
-from flask import Flask, jsonify, send_file, request
-
-from api.utils import ses_utils
-from services.anomaly_detector import generate_and_process_data
-from config.constatns import S3_BUCKET_NAME, PROCESSED_DATA_DIR, TABLE_ANOMALY_METRICS, INPUT_DATA_DIR
-from dynamodb.metric_data import MetricDataRepo
-from models.metric import Metric
-from utils.s3_utils import S3Utils
-from services.csv_generation import save_transactions_to_csv
-from services.anomaly_detector_read_s3 import process_csv_from_s3  # <-- adjust if needed
-from services.CSVGenerator import generate_dataset
 from threading import Thread
+
 import joblib
 import pandas as pd
-from services.anomaly_rules import anomaly_rules, add_anomaly
-from services.anomaly_detector_updated import process_csv_from_s3
+from flask import Flask, jsonify, send_file, request
 
+from api.dynamodb.anomaly_transaction_repo import AnomalyTransactionRepository
+from api.models.anomaly_transation import AnomalyTransaction
+from api.utils import ses_utils
+from config.constatns import S3_BUCKET_NAME, PROCESSED_DATA_DIR, TABLE_ANOMALY_METRICS, INPUT_DATA_DIR, \
+    TABLE_ANOMALY_TRANSACTION
+from dynamodb.metric_data import MetricDataRepo
+from models.metric import Metric
+from services.CSVGenerator import generate_dataset
+from services.anomaly_detector import generate_and_process_data
+from services.anomaly_detector_read_s3 import process_csv_from_s3  # <-- adjust if needed
+from services.anomaly_detector_updated import process_csv_from_s3
+from services.anomaly_rules import anomaly_rules
+from services.csv_generation import save_transactions_to_csv
+from utils.s3_utils import S3Utils
 
 app = Flask(__name__)
 OUTPUT_FOLDER = "output"
@@ -242,15 +245,24 @@ def detect_single_anomaly():
                 "reason": best_model[2]
             })
 
-        return jsonify({
-            "transaction_id": txn.get("transaction_id"),
-            "customer_Name": txn.get("customer_Name"),
-            "merchant_name": txn.get("merchant_name"),
-            "store_name": txn.get("store_name"),
-            "transaction_amount": txn.get("amount"),
-            "is_anomaly": len(detections) > 0,
-            "detections": detections
-        }), 200
+        transaction = AnomalyTransaction(
+            transaction_id=txn.get("transaction_id"),
+            customer_name=txn.get("customer_Name"),
+            merchant_name=txn.get("merchant_name"),
+            store_name=txn.get("store_name"),
+            transaction_amount=txn.get("amount"),
+            is_anomaly=len(detections) > 0,
+            detections=detections
+        )
+
+        if transaction.is_anomaly:
+            db = AnomalyTransactionRepository(TABLE_ANOMALY_TRANSACTION)
+            db.save(transaction)
+            print(f"✅ Transaction {transaction.transaction_id} saved to DynamoDB")
+        else:
+            print(f"⚠️ Transaction {transaction.transaction_id} skipped (not anomaly)")
+
+        return jsonify(transaction), 200
 
     except Exception as e:
         import traceback
@@ -258,6 +270,28 @@ def detect_single_anomaly():
             "error": str(e),
             "trace": traceback.format_exc()
         }), 500
+
+@app.route('/anomaly_transaction', methods=['GET'])
+def get_all_anomaly_transactions():
+    try:
+        trans_repo = AnomalyTransactionRepository(TABLE_ANOMALY_TRANSACTION)
+        return trans_repo.get_all_items()
+    except Exception as e:
+        app.logger.error(str(e))
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/anomaly_transaction/<transaction_id>', methods=['GET'])
+def get_anomaly_transaction_by_id(transaction_id):
+    try:
+        trans_repo = AnomalyTransactionRepository(TABLE_ANOMALY_TRANSACTION)
+        key = {"transaction_id": transaction_id}
+        txn = trans_repo.get_item(key)
+        if not txn:
+            return jsonify({"message": "Transaction not found"}), 404
+        return txn
+    except Exception as e:
+        app.logger.error(str(e))
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == '__main__':
