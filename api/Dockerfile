@@ -1,30 +1,32 @@
+# Use slim Python image
 FROM python:3.11-slim
-# Install system certificates
-RUN apt-get update && apt-get install -y ca-certificates
 
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    gcc \
-    libpq-dev \
+# Install only required system dependencies for psycopg2-binary and HTTPS
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libpq-dev \
+        ca-certificates \
+        apt-transport-https \
+        wget \
     && rm -rf /var/lib/apt/lists/*
 
+# Copy Python requirements and install
 COPY requirements.txt .
-RUN pip install --upgrade pip && pip install -r requirements.txt
+RUN pip install --upgrade pip \
+    && pip install -r requirements.txt
 
-# 👇 Copy the *entire api/ folder* into /app/api
+# Copy entire API folder
 COPY . /app/api
-
-# 👇 Set correct working dir inside container
 WORKDIR /app/api
-
-# 👇 Add PYTHONPATH so "api." imports work
-ENV PYTHONPATH=/app
 
 EXPOSE 5000
 
-# 👇 run from /app/api/app.py, referencing api.app
+# Run the application with Gunicorn
 CMD ["gunicorn", "api.app:app", "-b", "0.0.0.0:5000", "--workers=4"]
