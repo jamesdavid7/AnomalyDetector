@@ -1,8 +1,12 @@
+from boto3.dynamodb import table
+from botocore.exceptions import ClientError
 from flask import Flask, jsonify, send_file, request
 
+from api.dynamodb.transaction_data import TransactionRepo
 from api.utils import ses_utils
 from services.anomaly_detector import generate_and_process_data
-from config.constatns import S3_BUCKET_NAME, PROCESSED_DATA_DIR, TABLE_ANOMALY_METRICS, INPUT_DATA_DIR
+from config.constatns import S3_BUCKET_NAME, PROCESSED_DATA_DIR, TABLE_ANOMALY_METRICS, INPUT_DATA_DIR, \
+    TABLE_TRANSACTION
 from dynamodb.metric_data import MetricDataRepo
 from models.metric import Metric
 from utils.s3_utils import S3Utils
@@ -98,6 +102,38 @@ def process_anomaly_bg():
     except Exception as e:
         print("Error:", str(e))
         return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route("/transactions", methods=["GET"])
+def get_transactions():
+    """
+    Retrieve transactions from DynamoDB with pagination.
+    Query Params:
+        limit: int (default=10)
+        last_evaluated_key: str (optional, JSON string from previous response)
+    """
+    try:
+        # Get query params
+        limit = int(request.args.get("limit", 10))
+        last_evaluated_key = request.args.get("last_evaluated_key")
+
+        import json
+        if last_evaluated_key:
+            try:
+                last_evaluated_key = json.loads(last_evaluated_key)
+            except json.JSONDecodeError:
+                return jsonify({"error": "Invalid last_evaluated_key format"}), 400
+        else:
+            last_evaluated_key = None
+
+        # Use repo
+        repo = TransactionRepo(TABLE_TRANSACTION)
+        result = repo.get_transactions_paginated(limit=limit, last_evaluated_key=last_evaluated_key)
+
+        return jsonify(result), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 if __name__ == '__main__':
     '''
