@@ -6,7 +6,11 @@ from flask import Flask, jsonify, send_file, request
 
 from api.dynamodb.anomaly_transaction_repo import AnomalyTransactionRepository
 from api.models.anomaly_transation import AnomalyTransaction
+from api.dynamodb.transaction_data import TransactionRepo
 from api.utils import ses_utils
+from services.anomaly_detector import generate_and_process_data
+from config.constatns import S3_BUCKET_NAME, PROCESSED_DATA_DIR, TABLE_ANOMALY_METRICS, INPUT_DATA_DIR, \
+    TABLE_TRANSACTION
 from config.constatns import S3_BUCKET_NAME, PROCESSED_DATA_DIR, TABLE_ANOMALY_METRICS, INPUT_DATA_DIR, \
     TABLE_ANOMALY_TRANSACTION
 from dynamodb.metric_data import MetricDataRepo
@@ -20,6 +24,7 @@ from services.csv_generation import save_transactions_to_csv
 from utils.s3_utils import S3Utils
 
 app = Flask(__name__)
+
 OUTPUT_FOLDER = "output"
 OUTPUT_FILENAME = "transactions_with_anomalies.csv"
 # Load models once (for performance)
@@ -291,6 +296,38 @@ def get_anomaly_transaction_by_id(transaction_id):
         return txn
     except Exception as e:
         app.logger.error(str(e))
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/transactions", methods=["GET"])
+def get_transactions():
+    """
+    Retrieve transactions from DynamoDB with pagination.
+    Query Params:
+        limit: int (default=10)
+        last_evaluated_key: str (optional, JSON string from previous response)
+    """
+    try:
+        # Get query params
+        limit = int(request.args.get("limit", 10))
+        last_evaluated_key = request.args.get("last_evaluated_key")
+
+        import json
+        if last_evaluated_key:
+            try:
+                last_evaluated_key = json.loads(last_evaluated_key)
+            except json.JSONDecodeError:
+                return jsonify({"error": "Invalid last_evaluated_key format"}), 400
+        else:
+            last_evaluated_key = None
+
+        # Use repo
+        repo = TransactionRepo(TABLE_TRANSACTION)
+        result = repo.get_transactions_paginated(limit=limit, last_evaluated_key=last_evaluated_key)
+
+        return jsonify(result), 200
+
+    except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
