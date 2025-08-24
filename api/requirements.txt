@@ -12,3 +12,8 @@ openai
 msoffcrypto-tool
 openpyxl
 shap
+pywebpush
+cryptography
+eventlet
+flask_socketio
+python-socketio[client]

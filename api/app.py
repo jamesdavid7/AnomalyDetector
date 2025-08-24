@@ -1,19 +1,22 @@
+# backend.py
+import eventlet
+eventlet.monkey_patch()
 from threading import Thread
+
 
 import joblib
 import pandas as pd
-from flask import Flask, jsonify, send_file, request
-
 from api.dynamodb.anomaly_transaction_repo import AnomalyTransactionRepository
-from api.models.anomaly_transation import AnomalyTransaction
 from api.dynamodb.transaction_data import TransactionRepo
+from api.models.anomaly_transation import AnomalyTransaction
 from api.utils import ses_utils
-from services.anomaly_detector import generate_and_process_data
-from config.constatns import S3_BUCKET_NAME, PROCESSED_DATA_DIR, TABLE_ANOMALY_METRICS, INPUT_DATA_DIR, \
-    TABLE_TRANSACTION
 from config.constatns import S3_BUCKET_NAME, PROCESSED_DATA_DIR, TABLE_ANOMALY_METRICS, INPUT_DATA_DIR, \
     TABLE_ANOMALY_TRANSACTION
+from config.constatns import TABLE_TRANSACTION
 from dynamodb.metric_data import MetricDataRepo
+from flask import Flask, jsonify, request
+from flask import send_file
+from flask_socketio import SocketIO
 from models.metric import Metric
 from services.CSVGenerator import generate_dataset
 from services.anomaly_detector import generate_and_process_data
@@ -24,6 +27,7 @@ from services.csv_generation import save_transactions_to_csv
 from utils.s3_utils import S3Utils
 
 app = Flask(__name__)
+socketio = SocketIO(app, cors_allowed_origins="*")  # allow Streamlit to connect
 
 OUTPUT_FOLDER = "output"
 OUTPUT_FILENAME = "transactions_with_anomalies.csv"
@@ -46,6 +50,9 @@ numeric_cols = [
 cat_cols = ['card_type', 'currency', 'terminal_currency']
 
 feature_cols = numeric_cols + [c + "_code" for c in cat_cols]
+subscriptions = []
+
+
 
 @app.route('/run-anomaly-detection', methods=['GET'])
 def run_detection():
@@ -209,9 +216,10 @@ def feature_anomaly_reason(txn, features):
 
         # Only join if there are reasons
     return "; ".join(reasons) if reasons else None
-
+anomalies = []
 @app.route("/transactions/detect-anomaly", methods=["POST"])
 def detect_single_anomaly():
+
     try:
         txn = request.get_json(force=True)
         detections = []
@@ -261,8 +269,20 @@ def detect_single_anomaly():
         )
 
         if transaction.is_anomaly:
+            print("➡️ Emitting anomaly event...")
+            socketio.emit(
+                'anomaly_detected',
+                {
+                    "transaction_id": txn.get("transaction_id"),
+                    "customer_name": txn.get("customer_Name", "Unknown"),
+                    "amount": txn.get("amount", 0)
+                },
+
+            )
+            print(f"🚨 Anomaly detected and sent: {txn.get('transaction_id')}")
             db = AnomalyTransactionRepository(TABLE_ANOMALY_TRANSACTION)
             db.save(transaction)
+
             print(f"✅ Transaction {transaction.transaction_id} saved to DynamoDB")
         else:
             print(f"⚠️ Transaction {transaction.transaction_id} skipped (not anomaly)")
@@ -332,7 +352,7 @@ def get_transactions():
 
 
 if __name__ == '__main__':
-
+    socketio.run(app, host="0.0.0.0", port=5000)
   #  app.run(debug=True)
 
-    app.run(host="0.0.0.0", port=5000, debug=True)
+

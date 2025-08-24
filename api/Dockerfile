@@ -10,7 +10,7 @@ WORKDIR /app
 
 # Install only required system dependencies for psycopg2-binary and HTTPS
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+    && apt-get install -y \
         libpq-dev \
         ca-certificates \
         apt-transport-https \
@@ -29,4 +29,4 @@ WORKDIR /app/api
 EXPOSE 5000
 
 # Run the application with Gunicorn
-CMD ["gunicorn", "api.app:app", "-b", "0.0.0.0:5000", "--workers=4"]
+CMD ["gunicorn", "-k", "eventlet", "-w", "1", "-b", "0.0.0.0:5000", "api.app:app"]
