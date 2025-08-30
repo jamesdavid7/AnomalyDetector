@@ -1,5 +1,15 @@
 # backend.py
+import json
+import os
+import traceback
+from datetime import datetime
+from decimal import Decimal
+
+
+os.environ["EVENTLET_NO_GREENDNS"] = "yes"
 import eventlet
+from api.services.openAIAnalysis import analyze_transaction
+
 eventlet.monkey_patch()
 from threading import Thread
 
@@ -7,12 +17,10 @@ from threading import Thread
 import joblib
 import pandas as pd
 from api.dynamodb.anomaly_transaction_repo import AnomalyTransactionRepository
-from api.dynamodb.transaction_data import TransactionRepo
-from api.models.anomaly_transation import AnomalyTransaction
+from api.models.anomaly_transaction import AnomalyTransaction
 from api.utils import ses_utils
 from config.constatns import S3_BUCKET_NAME, PROCESSED_DATA_DIR, TABLE_ANOMALY_METRICS, INPUT_DATA_DIR, \
     TABLE_ANOMALY_TRANSACTION
-from config.constatns import TABLE_TRANSACTION
 from dynamodb.metric_data import MetricDataRepo
 from flask import Flask, jsonify, request
 from flask import send_file
@@ -258,39 +266,69 @@ def detect_single_anomaly():
                 "reason": best_model[2]
             })
 
-        transaction = AnomalyTransaction(
-            transaction_id=txn.get("transaction_id"),
-            customer_name=txn.get("customer_Name"),
-            merchant_name=txn.get("merchant_name"),
-            store_name=txn.get("store_name"),
-            transaction_amount=txn.get("amount"),
-            is_anomaly=len(detections) > 0,
-            detections=detections
-        )
-
-        if transaction.is_anomaly:
-            print("➡️ Emitting anomaly event...")
-            socketio.emit(
-                'anomaly_detected',
-                {
-                    "transaction_id": txn.get("transaction_id"),
-                    "customer_name": txn.get("customer_Name", "Unknown"),
-                    "amount": txn.get("amount", 0)
-                },
-
+            # Build transaction
+            transaction = AnomalyTransaction(
+                transaction_id=txn.get("transaction_id"),
+                account_id=txn.get("account_id"),
+                customer_name=txn.get("customer_Name"),
+                customer_id=txn.get("customer_id"),
+                merchant_name=txn.get("merchant_name"),
+                store_name=txn.get("store_name"),
+                card_number=txn.get("card_number"),
+                customer_location=txn.get("customer_location"),
+                card_type=txn.get("card_type"),
+                card_expire_date=txn.get("card_expire_date"),
+                transaction_type=txn.get("transaction_type"),
+                transaction_amount=float(txn.get("amount", 0)),
+                transaction_status=txn.get("transaction_status"),
+                banking_charge=float(txn.get("banking_charge", 0)),
+                currency=txn.get("currency"),
+                terminal_currency=txn.get("terminal_currency"),
+                terminal_id=txn.get("terminal_id"),
+                timestamp_initiated=safe_to_epoch(txn.get("timestamp_initiated")),
+                timestamp_completed=safe_to_epoch(txn.get("timestamp_completed")),
+                retry_count=int(txn.get("retry_count", 0)),
+                device_id=txn.get("device_id"),
+                ip_address=txn.get("ip_address"),
+                geo_location=txn.get("geo_location"),
+                created_by=txn.get("created_by"),
+                created_at=safe_to_epoch(txn.get("created_at")),
+                is_anomaly=len(detections) > 0,
+                detections=detections
             )
-            print(f"🚨 Anomaly detected and sent: {txn.get('transaction_id')}")
+
+            # ✅ If anomaly detected → call OpenAI to enrich details
+            if transaction.is_anomaly:
+                print("➡️ Sending anomaly for enrichment via OpenAI...")
+                enriched_txn = analyze_transaction(transaction.to_item(transaction))
+                # Update transaction with enriched anomaly fields
+                transaction.anomaly_type = enriched_txn.get("anomaly_type")
+                transaction.classification = enriched_txn.get("classification")
+                transaction.explanation = enriched_txn.get("explanation")
+                transaction.suggested_action = enriched_txn.get("suggested_action")
+                transaction.anomaly_score = enriched_txn.get("anomaly_score", 0.0)
+
+                # Emit anomaly event
+                # socketio.emit(
+                #     'anomaly_detected',
+                #     {
+                #         "transaction_id": transaction.transaction_id,
+                #         "customer_name": transaction.customer_name,
+                #         "amount": transaction.transaction_amount
+                #     },
+                # )
+                print(f"🚨 Anomaly detected and enriched: {transaction.transaction_id}")
+
+            # ✅ Store *all* transactions (normal + anomaly)
             db = AnomalyTransactionRepository(TABLE_ANOMALY_TRANSACTION)
+            print("final txn : ", transaction)
             db.save(transaction)
-
             print(f"✅ Transaction {transaction.transaction_id} saved to DynamoDB")
-        else:
-            print(f"⚠️ Transaction {transaction.transaction_id} skipped (not anomaly)")
 
-        return jsonify(transaction), 200
+            return jsonify(transaction.__dict__), 200
 
     except Exception as e:
-        import traceback
+        print(traceback.format_exc())
         return jsonify({
             "error": str(e),
             "trace": traceback.format_exc()
@@ -309,46 +347,76 @@ def get_all_anomaly_transactions():
 def get_anomaly_transaction_by_id(transaction_id):
     try:
         trans_repo = AnomalyTransactionRepository(TABLE_ANOMALY_TRANSACTION)
-        key = {"transaction_id": transaction_id}
-        txn = trans_repo.get_item(key)
+        txn = trans_repo.scan_by_txn_id(transaction_id)  # scan method
         if not txn:
             return jsonify({"message": "Transaction not found"}), 404
-        return txn
+        return jsonify(txn), 200
     except Exception as e:
+        print(traceback.format_exc())
         app.logger.error(str(e))
         return jsonify({"error": str(e)}), 500
 
+def clean_decimals(obj):
+    """Recursively convert Decimal to int or float for JSON serialization."""
+    if isinstance(obj, list):
+        return [clean_decimals(x) for x in obj]
+    if isinstance(obj, dict):
+        return {k: clean_decimals(v) for k, v in obj.items()}
+    if isinstance(obj, Decimal):
+        return int(obj) if obj % 1 == 0 else float(obj)
+    return obj
 
-@app.route("/transactions", methods=["GET"])
-def get_transactions():
-    """
-    Retrieve transactions from DynamoDB with pagination.
-    Query Params:
-        limit: int (default=10)
-        last_evaluated_key: str (optional, JSON string from previous response)
-    """
+@app.route("/anomaly_transaction/list", methods=['GET'])
+def get_paginated_anomaly_transactions():
     try:
-        # Get query params
         limit = int(request.args.get("limit", 10))
+        sort_order = request.args.get("sort_order", "desc")  # "asc" or "desc"
         last_evaluated_key = request.args.get("last_evaluated_key")
 
-        import json
-        if last_evaluated_key:
-            try:
-                last_evaluated_key = json.loads(last_evaluated_key)
-            except json.JSONDecodeError:
-                return jsonify({"error": "Invalid last_evaluated_key format"}), 400
-        else:
-            last_evaluated_key = None
+        # Convert token back to dict
+        lek = json.loads(last_evaluated_key) if last_evaluated_key else None
 
-        # Use repo
-        repo = TransactionRepo(TABLE_TRANSACTION)
-        result = repo.get_transactions_paginated(limit=limit, last_evaluated_key=last_evaluated_key)
+        # Fetch from DynamoDB
+        trans_repo = AnomalyTransactionRepository(TABLE_ANOMALY_TRANSACTION)
+        transactions, next_key = trans_repo.get_paginated_items(
+            limit=limit,
+            last_evaluated_key=lek,
+            sort_order=sort_order
+        )
 
-        return jsonify(result), 200
+        return jsonify({
+            "items": [AnomalyTransaction.to_item(tx) for tx in transactions],
+            "next_token": json.dumps(clean_decimals(next_key)) if next_key else None
+        })
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+def safe_to_epoch(ts):
+    """
+    Convert a timestamp (ISO string, datetime, or epoch number) to epoch milliseconds (int).
+    """
+    try:
+        if ts is None:
+            return int(datetime.utcnow().timestamp() * 1000)
+
+        if isinstance(ts, (int, float)):
+            # If already looks like epoch millis (13 digits), just return it
+            if ts > 1e12:
+                return int(ts)
+            # If epoch seconds, convert to millis
+            return int(ts * 1000)
+
+        if isinstance(ts, datetime):
+            return int(ts.timestamp() * 1000)
+
+        # Parse ISO-like string
+        ts = ts.replace("T:", "T")  # fix formatting if needed
+        return int(datetime.fromisoformat(ts).timestamp() * 1000)
+
+    except Exception:
+        print(traceback.format_exc())
+        return int(datetime.utcnow().timestamp() * 1000)
 
 
 if __name__ == '__main__':

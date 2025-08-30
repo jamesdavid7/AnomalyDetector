@@ -3,6 +3,8 @@ import requests
 import pandas as pd
 import plotly.express as px
 import os
+import uuid
+
 from datetime import datetime, timedelta, timezone
 
 st.set_page_config(layout="wide")
@@ -10,7 +12,7 @@ st.title("🧠 POS Anomaly Dashboard")
 
 # ---------------- API Endpoints ----------------
 API_BASE = os.getenv("API_URL", "http://flask_api:5000")
-TRANSACTIONS_ENDPOINT = f"{API_BASE}/transactions"   # new endpoint to fetch recent txns
+TRANSACTIONS_ENDPOINT = f"{API_BASE}/anomaly_transaction/list"   # new endpoint to fetch recent txns
 METRICS_ENDPOINT = f"{API_BASE}/metrics"             # anomaly metrics (historical)
 DOWNLOAD_ENDPOINT = f"{API_BASE}/download"           # anomaly csv download
 
@@ -18,23 +20,39 @@ DOWNLOAD_ENDPOINT = f"{API_BASE}/download"           # anomaly csv download
 # ===================================================
 # Helpers
 # ===================================================
-def fetch_transactions(limit: int = 10, start_key=None):
-    """Fetch transactions with DynamoDB pagination."""
+def fetch_transactions(limit: int = 10, start_key=None, sort_order: str = "desc"):
+    """Fetch transactions from Flask API with DynamoDB pagination."""
     try:
-        url = f"{TRANSACTIONS_ENDPOINT}?limit={limit}"
+        url = f"{TRANSACTIONS_ENDPOINT}?limit={limit}&sort_order={sort_order}"
         if start_key:
-            url += f"&start_key={start_key}"
+            # ✅ Ensure next_token is URL-safe
+            url += f"&last_evaluated_key={quote(start_key)}"
+
         res = requests.get(url)
         if res.status_code == 200:
             data = res.json()
-            df = pd.DataFrame(data.get("transactions", []))
+
+            # ✅ Build DataFrame from items
+            df = pd.DataFrame(data.get("items", []))
+
+            # ✅ Normalize timestamps if present
             if not df.empty and "timestamp_initiated" in df.columns:
+                # Ensure numeric first to avoid FutureWarning
                 df["timestamp_initiated"] = pd.to_datetime(
-                    df["timestamp_initiated"], errors="coerce", utc=True
+                    pd.to_numeric(df["timestamp_initiated"], errors="coerce"),
+                    unit="ms",
+                    utc=True
                 )
-            return df, data.get("last_evaluated_key")
+
+                df["timestamp_initiated_utc"] = df["timestamp_initiated"].dt.strftime(
+                    "%Y-%m-%d %H:%M:%S UTC"
+                )
+            # ✅ Return DataFrame and next_token string
+            return df, data.get("next_token")
+
     except Exception as e:
         st.error(f"Error fetching transactions: {e}")
+
     return pd.DataFrame(), None
 
 
@@ -92,7 +110,7 @@ if page == "📡 Real-Time Dashboard":
         col1, col2, col3 = st.columns(3)
         col1.metric("Total Transactions", len(df))
         col2.metric("Anomalies", int(df["is_anomaly"].sum()) if "is_anomaly" in df else 0)
-        col3.metric("Avg Amount", round(df["amount"].mean(), 2))
+        col3.metric("Avg Amount", round(df["transaction_amount"].mean(), 2))  # ✅ fixed key
 
         # ================= LIVE ALERTS =================
         st.markdown("### 🚨 Live Alerts")
@@ -103,9 +121,15 @@ if page == "📡 Real-Time Dashboard":
             st.info("No live alerts detected.")
         else:
             for _, row in alerts.head(5).iterrows():
-                ts = row["timestamp_initiated"].strftime("%I:%M %p")
-                st.write(f"**{ts} — ALERT:** {row.get('anomaly_type', 'Unknown')} "
-                         f"at {row.get('store_name', 'N/A')}")
+                ts = row["timestamp_initiated"]
+                if pd.notna(ts):  # ✅ Only format valid timestamps
+                    ts = ts.strftime("%I:%M %p")
+                else:
+                    ts = "Unknown Time"
+                st.write(
+                    f"**{ts} — ALERT:** {row.get('anomaly_type', 'Unknown')} "
+                    f"at {row.get('store_name', 'N/A')}"
+                )
 
         # ---------------- Real-Time Counters ----------------
         st.markdown("### 📊 Real-Time Counters")
@@ -116,9 +140,9 @@ if page == "📡 Real-Time Dashboard":
 
         # Compute KPIs
         high_value = df[
-            (df.get("amount", 0) > 2000) &
+            (df.get("transaction_amount", 0) > 2000) &
             (df["timestamp_initiated"] > current_time - timedelta(minutes=15))
-            ] if "amount" in df.columns else pd.DataFrame()
+            ] if "transaction_amount" in df.columns else pd.DataFrame()
 
         refunds_last_10 = df[
             (df.get("transaction_status") == "REFUND") &
@@ -148,14 +172,63 @@ if page == "📡 Real-Time Dashboard":
         col4.metric("Manual vs Chip/Tap (1h)", f"{manual_ratio}% manual", "⚠ High" if manual_ratio > 5 else "")
 
         # ================= TRANSACTIONS TABLE =================
+        st.markdown("<a name='transactions'></a>", unsafe_allow_html=True)  # anchor at top of table
         st.markdown(f"### 📝 Transactions (Page {st.session_state.page_num})")
-        st.dataframe(
-            df[["transaction_id", "store_name", "amount", "currency",
-                "transaction_status", "timestamp_initiated"]],
-            use_container_width=True
-        )
 
-        # Pagination controls
+        # Columns to display (always exist)
+        display_cols = [
+            "transaction_id",
+            "store_name",
+            "transaction_amount",
+            "currency",
+            "transaction_status",
+            "timestamp_initiated_utc",
+            "is_anomaly"
+        ]
+
+        # Add anomaly_type if present in df
+        if "anomaly_type" in df.columns:
+            display_cols.append("anomaly_type")
+
+        # Map column names to shorter display names
+        col_display_names = {
+            "transaction_id": "ID",
+            "store_name": "Store",
+            "transaction_amount": "Amount",
+            "currency": "Cur",
+            "transaction_status": "Status",
+            "timestamp_initiated_utc": "Initiated (UTC)",
+            "is_anomaly": "Anomaly?",
+            "anomaly_type": "Type"
+        }
+
+        # Subset dataframe
+        display_df = df[display_cols]
+
+        # ----- Header row -----
+        header_cols = st.columns(len(display_cols) + 1)
+        for i, col in enumerate(display_cols):
+            header_cols[i].markdown(f"**{col_display_names.get(col, col)}**")
+        header_cols[-1].markdown("**Action**")
+
+        # ----- Data rows with inline button -----
+        for i, row in display_df.iterrows():
+            cols = st.columns(len(display_cols) + 1)
+            for j, col_name in enumerate(display_cols):
+                value = row[col_name]
+                # anomaly highlighting
+                if col_name == "is_anomaly" and row["is_anomaly"]:
+                    cols[j].markdown(f"<div style='background-color:#ffcccc'>{value}</div>", unsafe_allow_html=True)
+                else:
+                    cols[j].write(value)
+            # Simple icon button for details
+            if cols[-1].button("🔍", key=f"view_{row['transaction_id']}"):
+                st.session_state.selected_txn = df.iloc[i].to_dict()
+                st.session_state.scroll_to_details = True
+                st.rerun()
+
+        # ================= Pagination controls =================
+        # (stick directly under the table regardless of details)
         nav1, nav2, nav3 = st.columns([1, 6, 1])
         with nav1:
             if st.button("⬅️ Previous") and st.session_state.page_stack:
@@ -170,14 +243,44 @@ if page == "📡 Real-Time Dashboard":
                     st.session_state.page_num += 1
                     st.rerun()
 
-        # Plot: Transactions Over Time
-        if "timestamp_initiated" in df.columns:
-            fig_time = px.line(
-                df.sort_values("timestamp_initiated"),
-                x="timestamp_initiated", y="amount",
-                title="Transaction Amounts Over Time"
-            )
-            st.plotly_chart(fig_time, use_container_width=True)
+        # ================= Popup (2-column key/value layout) =================
+        if "selected_txn" in st.session_state and st.session_state.selected_txn:
+            st.markdown("<a name='details'></a>", unsafe_allow_html=True)  # anchor only if visible
+            st.markdown("## 🔍 Transaction Details")
+            selected = st.session_state.selected_txn
+
+            # Render as key-value pairs
+            for k, v in selected.items():
+                c1, c2 = st.columns([1, 3])
+                c1.markdown(f"**{col_display_names.get(k, k)}**")
+                c2.write(v)
+
+            if st.button("❌ Close"):
+                st.session_state.selected_txn = None
+                st.session_state.scroll_to_table = True
+                st.rerun()
+
+            # auto scroll if flag set
+            if st.session_state.get("scroll_to_details", False):
+                js = """
+                <script>
+                var el = window.parent.document.querySelector("a[name='details']");
+                if(el){ el.scrollIntoView({behavior: 'smooth'}); }
+                </script>
+                """
+                st.components.v1.html(js, height=0)
+                st.session_state.scroll_to_details = False
+
+        # auto scroll back to table after closing
+        if st.session_state.get("scroll_to_table", False):
+            js = """
+            <script>
+            var el = window.parent.document.querySelector("a[name='transactions']");
+            if(el){ el.scrollIntoView({behavior: 'smooth'}); }
+            </script>
+            """
+            st.components.v1.html(js, height=0)
+            st.session_state.scroll_to_table = False
 
         # Plot: Anomaly Distribution
         if "anomaly_type" in df.columns:
@@ -186,33 +289,6 @@ if page == "📡 Real-Time Dashboard":
                 fig_anom = px.bar(anomaly_df, x="anomaly_type", y="count",
                                   title="Anomaly Distribution")
                 st.plotly_chart(fig_anom, use_container_width=True)
-
-        # ---------------- Map View ----------------
-        st.markdown("### 🗺️ Anomaly Map (by Store)")
-
-        if "is_anomaly" in df.columns and not df[df["is_anomaly"] == 1].empty:
-            anomaly_df = df[df["is_anomaly"] == 1]
-
-            # Join with metadata on store_name
-            if "store_name" in anomaly_df.columns and "store_name" in store_meta.columns:
-                anomaly_df = anomaly_df.merge(
-                    store_meta[["store_name", "store_lat", "store_lon"]],
-                    on="store_name",
-                    how="left"
-                )
-
-                # Check if valid coords exist
-                if not anomaly_df[["store_lat", "store_lon"]].dropna().empty:
-                    anomaly_coords = anomaly_df.rename(
-                        columns={"store_lat": "latitude", "store_lon": "longitude"}
-                    )
-                    st.map(anomaly_coords[["latitude", "longitude"]], zoom=3)
-                else:
-                    st.info("No location data available for anomalies.")
-            else:
-                st.info("Store metadata not available for mapping.")
-        else:
-            st.info("No active anomalies to display on map.")
 
     # ===================================================
     # 📆 SHORT-TERM METRICS PANEL (Today / Last 24 Hours)
@@ -236,8 +312,8 @@ if page == "📡 Real-Time Dashboard":
             st.plotly_chart(fig_refund, use_container_width=True)
 
         # Top SKUs sold in high-value anomalies today
-        if {"sku", "amount", "is_anomaly"}.issubset(df_today.columns):
-            sku_df = df_today[(df_today["is_anomaly"] == 1) & (df_today["amount"] > 2000)]
+        if {"sku", "transaction_amount", "is_anomaly"}.issubset(df_today.columns):
+            sku_df = df_today[(df_today["is_anomaly"] == 1) & (df_today["transaction_amount"] > 2000)]
             if not sku_df.empty:
                 top_skus = sku_df["sku"].value_counts().reset_index()
                 top_skus.columns = ["sku", "count"]
@@ -325,9 +401,9 @@ if page == "📡 Real-Time Dashboard":
             st.plotly_chart(fig_sku_fraud, use_container_width=True)
 
         # Chargeback losses vs prevented fraud (dummy calc)
-        if {"amount", "is_anomaly"}.issubset(df_hist.columns):
-            chargeback_losses = df_hist[df_hist["is_anomaly"] == 1]["amount"].sum()
-            prevented_fraud = df_hist[df_hist["is_anomaly"] == 0]["amount"].sum() * 0.01  # assume 1% prevented
+        if {"transaction_amount", "is_anomaly"}.issubset(df_hist.columns):
+            chargeback_losses = df_hist[df_hist["is_anomaly"] == 1]["transaction_amount"].sum()
+            prevented_fraud = df_hist[df_hist["is_anomaly"] == 0]["transaction_amount"].sum() * 0.01  # assume 1% prevented
             roi_df = pd.DataFrame({
                 "Category": ["Chargeback Losses", "Prevented Fraud"],
                 "Amount": [chargeback_losses, prevented_fraud]
