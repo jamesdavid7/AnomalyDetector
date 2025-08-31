@@ -3,12 +3,15 @@ import random
 import tempfile
 from collections import Counter
 from datetime import datetime, timezone, timedelta
+from decimal import Decimal
 
 import boto3
 import pandas as pd
 # Your imports for metric & OpenAI advisory
-from api.config.constatns import TABLE_ANOMALY_METRICS
+from api.config.constatns import TABLE_ANOMALY_METRICS, TABLE_BATCH_ANOMALY_TRANSACTION
+from api.dynamodb.batch_anomaly_transaction_repo import BatchAnomalyTransactionRepository
 from api.dynamodb.metric_data import MetricDataRepo
+from api.models.batch_anomaly_transaction import BatchAnomalyTransaction
 from api.models.metric import Metric
 from api.services.OpenAIAdvisor import analyze_transaction
 from flask import Flask
@@ -39,13 +42,49 @@ def detect_rule_anomalies(row):
     return random.choice(anomalies) if anomalies else "none"
 def process_csv_from_s3(bucket, key):
     s3 = boto3.client("s3")
+    # to process only these anomalies via batch as others captured in realtime
+    target_anomalies = {
+        "amount_mismatch",
+        "duplicate_transaction",
+        "voided_but_not_settled",
+        "late_settlement"
+    }
+
+    ANOMALY_METADATA = {
+        "amount_mismatch": {
+            "classification": "Financial Discrepancy",
+            "explanation": "The settled amount does not match the authorized or expected transaction amount.",
+            "suggested_action": "Verify the transaction amount with the merchant and reconcile settlement records."
+        },
+        "duplicate_transaction": {
+            "classification": "Duplicate Payment",
+            "explanation": "The same transaction was recorded multiple times within a short timeframe.",
+            "suggested_action": "Check if multiple authorizations were triggered and reverse the duplicate transaction."
+        },
+        "voided_but_not_settled": {
+            "classification": "Settlement Issue",
+            "explanation": "The transaction was voided but still appears in settlement records.",
+            "suggested_action": "Confirm settlement logs and issue a refund if necessary."
+        },
+        "late_settlement": {
+            "classification": "Processing Delay",
+            "explanation": "The settlement occurred beyond the expected time window.",
+            "suggested_action": "Investigate payment processor delays and communicate with the merchant/bank."
+        }
+    }
 
     # Download file from S3
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
         temp_file_path = tmp.name
 
     s3.download_file(bucket, key, temp_file_path)
+
+    print("file downloaded from s3")
+
+
     df = pd.read_csv(temp_file_path)
+
+    print("file read completed")
 
     df['has_high_amount'] = df['amount'] > 5000
     df['has_long_duration'] = (
@@ -82,6 +121,8 @@ def process_csv_from_s3(bucket, key):
         'currency_mismatch_flag', 'status_fail_flag', 'charge_percent', 'amount_per_minute'
     ]].fillna(0)
 
+    print("Before Isolation forest")
+
     # === Isolation Forest ===
     iso_model = IsolationForest(contamination=0.25, n_estimators=300, random_state=42)
     predictions = iso_model.fit_predict(features)
@@ -116,15 +157,59 @@ def process_csv_from_s3(bucket, key):
         'iso_anomaly', 'iso_score', 'rule_anomalies', 'iso_anomaly_reason'
     ]
 
+    print("Before convert csv")
+
     # Save and upload result
     output_file = os.path.join(tempfile.gettempdir(), "transactions_with_anomalies.csv")
     df[output_columns].to_csv(output_file, index=False)
 
-    # Apply OpenAI LLM Analysis on first 10 records
-    df_to_analyze = df.head(12).copy()
-    advisory_output_cols = ["open_ai_anomaly", "anomaly_type", "classification", "explanation", "suggested_action",
-                            "anomaly_score"]
-    df_to_analyze[advisory_output_cols] = df_to_analyze.apply(analyze_transaction, axis=1)
+    # filtered dataframe for target anomalies only for batch processing
+    df_filtered = df[(df['anomaly_type'].isin(target_anomalies)) &
+    (df['iso_anomaly'] == True)]
+
+    print("filtered anomalies based on target size is :"+ str(len(df_filtered)))
+    print(df_filtered)
+
+    # build list of transaction objects
+    transactions = []
+
+    for _, row in df_filtered.iterrows():
+        anomaly_type = row.get("anomaly_type")
+        meta = ANOMALY_METADATA.get(anomaly_type, {})
+        txn = BatchAnomalyTransaction(
+            transaction_id=row.get("transaction_id"),
+            account_id=row.get("account_id"),
+            customer_id=row.get("customer_id"),
+            merchant_name=row.get("merchant_name"),
+            store_name=row.get("store_name"),
+            card_type=row.get("card_type"),
+            card_expire_date=row.get("card_expire_date"),
+            transaction_type=row.get("transaction_type"),
+            transaction_amount=Decimal(str(row.get("amount", 0))),
+            transaction_status=row.get("transaction_status"),
+            currency=row.get("currency"),
+            timestamp_initiated=(row.get("timestamp_initiated")),
+            timestamp_completed=(row.get("timestamp_completed")),
+            retry_count=int(row.get("retry_count", 0)),
+            device_id=row.get("device_id"),
+            ip_address=row.get("ip_address"),
+            geo_location=row.get("geo_location"),
+            created_by=row.get("created_by"),
+            created_at=(row.get("created_at")),
+            is_anomaly=row.get("iso_anomaly",False),
+            detections=row.get("iso_anomaly_reason",None),
+            anomaly_type=anomaly_type,
+            anomaly_score=Decimal(str(row.get("iso_score", 0))),
+            classification=meta.get("classification"),
+            explanation=meta.get("explanation"),
+            suggested_action=meta.get("suggested_action")
+        )
+        transactions.append(txn)
+
+    batch_anomaly_table = BatchAnomalyTransactionRepository(TABLE_BATCH_ANOMALY_TRANSACTION)
+    batch_anomaly_table.save_all(transactions)
+    print(f"✅ Saved {len(transactions)} batch anomaly transactions to DynamoDB in bulk")
+
 
     # Get current timestamp in YYYYMMDD_HHMMSS format
     timestamp = datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H-%M-%S")
@@ -132,12 +217,23 @@ def process_csv_from_s3(bucket, key):
     filename = f"transactions_with_anomalies_{timestamp}.csv"
     output_key = f"output/{filename}"
 
-    advisory_output_file = os.path.join(tempfile.gettempdir(), filename)
-    df_to_analyze.to_csv(advisory_output_file, index=False)
-    print(f"🔍 OpenAI advisory saved at: {advisory_output_file}")
+    #
+    # Disabling Open AI advisory for now in batch as it is taking too long to process
+    #
+
+    # # Apply OpenAI LLM Analysis on first 10 records
+    # df_to_analyze = df.head(12).copy()
+    # advisory_output_cols = ["open_ai_anomaly", "anomaly_type", "classification", "explanation", "suggested_action",
+    #                         "anomaly_score"]
+    # df_to_analyze[advisory_output_cols] = df_to_analyze.apply(analyze_transaction, axis=1)
+    #
+
+    # advisory_output_file = os.path.join(tempfile.gettempdir(), filename)
+    # df_to_analyze.to_csv(advisory_output_file, index=False)
+    # print(f"🔍 OpenAI advisory saved at: {advisory_output_file}")
 
     # Count the frequency of each anomaly type
-    counts = Counter(df_to_analyze['anomaly_type'])
+    counts = Counter(df_filtered['anomaly_type'])
 
     # Construct the metric_data list
     metric_data = [
@@ -156,7 +252,7 @@ def process_csv_from_s3(bucket, key):
     db = MetricDataRepo(TABLE_ANOMALY_METRICS)
     db.insert_item(metric)
 
-    s3.upload_file(advisory_output_file, bucket, output_key)
+    s3.upload_file(output_file, bucket, output_key)
     print(f"✅ Uploaded to s3://{bucket}/{output_key}")
 
     return output_key

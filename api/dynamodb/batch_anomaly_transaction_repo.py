@@ -5,12 +5,12 @@ from boto3.dynamodb.conditions import Attr
 from botocore.exceptions import ClientError
 
 from api.config.aws_config import AWSConfig
-from api.config.constatns import TABLE_ANOMALY_TRANSACTION
-from api.models.anomaly_transaction import AnomalyTransaction
+from api.config.constatns import TABLE_BATCH_ANOMALY_TRANSACTION
+from api.models.batch_anomaly_transaction import BatchAnomalyTransaction
 
 
-class AnomalyTransactionRepository:
-    def __init__(self, table_name=TABLE_ANOMALY_TRANSACTION):
+class BatchAnomalyTransactionRepository:
+    def __init__(self, table_name=TABLE_BATCH_ANOMALY_TRANSACTION):
         self.table = AWSConfig.get_dynamodb_resource().Table(table_name)
 
     def _to_dynamo(self, item):
@@ -26,13 +26,19 @@ class AnomalyTransactionRepository:
             return [self._to_dynamo(v) for v in item]
         return item
 
-    def save(self, transaction: AnomalyTransaction):
+    def save(self, transaction: BatchAnomalyTransaction):
         # Convert transaction to dict
-        item = AnomalyTransaction.to_item(transaction)
+        item = BatchAnomalyTransaction.to_item(transaction)
         # Ensure all floats → Decimal
         item = self._to_dynamo(item)
         # Save to DynamoDB
         self.table.put_item(Item=item)
+
+    def save_all(self, transactions):
+        """Save multiple transactions at once using batch_writer"""
+        with self.table.batch_writer() as batch:
+            for txn in transactions:
+                batch.put_item(Item=txn.__dict__)
 
     def get_item(self, key: dict):
         try:
@@ -49,18 +55,18 @@ class AnomalyTransactionRepository:
         except Exception as e:
             raise Exception(f"Unexpected error: {str(e)}")
 
-    def get_all_items(self) -> list[AnomalyTransaction]:
+    def get_all_items(self) -> list[BatchAnomalyTransaction]:
         try:
             items = []
             response = self.table.scan()
 
             raw_items = response.get("Items", [])
-            items.extend([AnomalyTransaction.from_item(item) for item in raw_items])
+            items.extend([BatchAnomalyTransaction.from_item(item) for item in raw_items])
 
             while "LastEvaluatedKey" in response:
                 response = self.table.scan(ExclusiveStartKey=response["LastEvaluatedKey"])
                 raw_items = response.get("Items", [])
-                items.extend([AnomalyTransaction.from_item(item) for item in raw_items])
+                items.extend([BatchAnomalyTransaction.from_item(item) for item in raw_items])
 
             return items
 
@@ -74,7 +80,7 @@ class AnomalyTransactionRepository:
             limit: int = 10,
             last_evaluated_key: Optional[dict] = None,
             sort_order: str = "desc"
-    ) -> Tuple[list[AnomalyTransaction], Optional[dict]]:
+    ) -> Tuple[list[BatchAnomalyTransaction], Optional[dict]]:
         """
         Fetch paginated anomaly transactions, sorted by created_at.
         """
@@ -85,7 +91,7 @@ class AnomalyTransactionRepository:
 
             response = self.table.scan(**scan_kwargs)
 
-            items = [AnomalyTransaction.from_item(item) for item in response.get("Items", [])]
+            items = [BatchAnomalyTransaction.from_item(item) for item in response.get("Items", [])]
 
             # ✅ Sort items by created_at (string ISO timestamp → sortable)
             items.sort(
@@ -109,6 +115,6 @@ class AnomalyTransactionRepository:
                 FilterExpression=Attr("transaction_id").eq(transaction_id)
             )
             items = response.get("Items", [])
-            return AnomalyTransaction.from_item(items[0]) if items else None
+            return BatchAnomalyTransaction.from_item(items[0]) if items else None
         except Exception as e:
             raise Exception(f"DynamoDB scan error: {str(e)}")

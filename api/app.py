@@ -10,7 +10,7 @@ os.environ["EVENTLET_NO_GREENDNS"] = "yes"
 import eventlet
 from api.services.openAIAnalysis import analyze_transaction
 
-eventlet.monkey_patch()
+eventlet.monkey_patch(os=False, thread=False, subprocess=False)
 from threading import Thread
 
 
@@ -28,7 +28,7 @@ from flask_socketio import SocketIO
 from models.metric import Metric
 from services.CSVGenerator import generate_dataset
 from services.anomaly_detector import generate_and_process_data
-from services.anomaly_detector_read_s3 import process_csv_from_s3  # <-- adjust if needed
+# from services.anomaly_detector_read_s3 import process_csv_from_s3  # <-- adjust if needed
 from services.anomaly_detector_updated import process_csv_from_s3
 from services.anomaly_rules import anomaly_rules
 from services.csv_generation import save_transactions_to_csv
@@ -309,14 +309,14 @@ def detect_single_anomaly():
                 transaction.anomaly_score = enriched_txn.get("anomaly_score", 0.0)
 
                 # Emit anomaly event
-                # socketio.emit(
-                #     'anomaly_detected',
-                #     {
-                #         "transaction_id": transaction.transaction_id,
-                #         "customer_name": transaction.customer_name,
-                #         "amount": transaction.transaction_amount
-                #     },
-                # )
+                socketio.emit(
+                    'anomaly_detected',
+                    {
+                        "transaction_id": transaction.transaction_id,
+                        "customer_name": transaction.customer_name,
+                        "amount": transaction.transaction_amount
+                    },
+                )
                 print(f"🚨 Anomaly detected and enriched: {transaction.transaction_id}")
 
             # ✅ Store *all* transactions (normal + anomaly)
