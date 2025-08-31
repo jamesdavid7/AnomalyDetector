@@ -2,9 +2,8 @@
 import json
 import os
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
-
 
 os.environ["EVENTLET_NO_GREENDNS"] = "yes"
 import eventlet
@@ -12,7 +11,6 @@ from api.services.openAIAnalysis import analyze_transaction
 
 eventlet.monkey_patch(os=False, thread=False, subprocess=False)
 from threading import Thread
-
 
 import joblib
 import pandas as pd
@@ -270,7 +268,7 @@ def detect_single_anomaly():
             transaction = AnomalyTransaction(
                 transaction_id=txn.get("transaction_id"),
                 account_id=txn.get("account_id"),
-                customer_name=txn.get("customer_Name"),
+                customer_name=txn.get("customer_name"),
                 customer_id=txn.get("customer_id"),
                 merchant_name=txn.get("merchant_name"),
                 store_name=txn.get("store_name"),
@@ -293,6 +291,7 @@ def detect_single_anomaly():
                 geo_location=txn.get("geo_location"),
                 created_by=txn.get("created_by"),
                 created_at=safe_to_epoch(txn.get("created_at")),
+                entry_mode=txn.get("entry_mode"),
                 is_anomaly=len(detections) > 0,
                 detections=detections
             )
@@ -308,7 +307,7 @@ def detect_single_anomaly():
                 transaction.suggested_action = enriched_txn.get("suggested_action")
                 transaction.anomaly_score = enriched_txn.get("anomaly_score", 0.0)
 
-                # Emit anomaly event
+                #Emit anomaly event
                 socketio.emit(
                     'anomaly_detected',
                     {
@@ -355,6 +354,69 @@ def get_anomaly_transaction_by_id(transaction_id):
         print(traceback.format_exc())
         app.logger.error(str(e))
         return jsonify({"error": str(e)}), 500
+
+@app.get("/anomaly_transaction/real_time_counters")
+def get_anomaly_transaction_stats():
+    try:
+        repo = AnomalyTransactionRepository(TABLE_ANOMALY_TRANSACTION)
+        current_time = datetime.utcnow()
+        now_epoch = int(current_time.timestamp())
+
+        # 1️⃣ High value transactions > 2000 in last 15 minutes
+        high_value_cutoff = int((current_time - timedelta(minutes=15)).timestamp() * 1000)
+        high_value = repo.scan_with_filters({
+            "transaction_amount": {"gt": 2000},
+            "timestamp_initiated": {"gt": high_value_cutoff}
+        })
+
+        # 2️⃣ Refunds in last 10 minutes
+        refunds_cutoff = int((current_time - timedelta(minutes=10)).timestamp())
+        refunds_last_10 = repo.scan_with_filters({
+            "transaction_status": {"eq": "REFUND"},
+            "timestamp_initiated": {"gt": refunds_cutoff}
+        })
+
+        # 3️⃣ Transactions outside business hours (0-6 AM)
+        all_transactions = repo.get_all_items()  # No other way to filter by hour
+        outside_hours_count = 0
+        manual_entries_count = 0
+        recent_1h_count = 0
+        manual_ratio = 0.0
+
+        for txn in all_transactions:
+
+            ts = txn.timestamp_initiated
+            txn_dt = safe_datetime(ts)
+            if ts:
+                if 0 <= txn_dt.hour <= 6:
+                    outside_hours_count += 1
+                # 4️⃣ Manual entry ratio in last 1 hour
+                if txn_dt > current_time - timedelta(hours=1):
+                    recent_1h_count += 1
+                    if txn.entry_mode == "MANUAL":
+                        manual_entries_count += 1
+
+        if recent_1h_count > 0:
+            manual_ratio = round((manual_entries_count / recent_1h_count) * 100, 1)
+
+        stats = {
+            "high_value_count": len(high_value),
+            "refunds_last_10_count": len(refunds_last_10),
+            "outside_hours_count": outside_hours_count,
+            "manual_entry_ratio": manual_ratio
+        }
+
+        return stats
+
+    except Exception as e:
+        print(traceback.format_exc())
+        return jsonify(content={"error": str(e)}, status_code=500)
+
+def safe_datetime(ts: int):
+    """Convert millisecond timestamp (int) → datetime (UTC)."""
+    if ts is None:
+        return None
+    return datetime.utcfromtimestamp(int(ts) / 1000.0)
 
 def clean_decimals(obj):
     """Recursively convert Decimal to int or float for JSON serialization."""
@@ -418,6 +480,24 @@ def safe_to_epoch(ts):
         print(traceback.format_exc())
         return int(datetime.utcnow().timestamp() * 1000)
 
+def bucketize(ts: int, bucket: str) -> int:
+    """
+    Floor a timestamp (epoch seconds) into the start of its bucket.
+    Supported buckets: 5m, 15m, 1h, 1d
+    """
+    if isinstance(ts, datetime):
+        ts = int(ts.timestamp())
+
+    if bucket == "5m":
+        return ts - (ts % (5 * 60))
+    elif bucket == "15m":
+        return ts - (ts % (15 * 60))
+    elif bucket == "1h":
+        return ts - (ts % (60 * 60))
+    elif bucket == "1d":
+        return ts - (ts % (24 * 60 * 60))
+    else:
+        raise ValueError(f"Unsupported bucket size: {bucket}")
 
 if __name__ == '__main__':
     socketio.run(app, host="0.0.0.0", port=5000)

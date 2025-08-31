@@ -1,11 +1,19 @@
+from urllib.parse import quote
+
 import streamlit as st
 import requests
 import pandas as pd
 import plotly.express as px
+import streamlit.components.v1 as components
+import queue
+import threading
+import socketio
+from streamlit_autorefresh import st_autorefresh
 import os
-import uuid
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
+
+# Initialize session state variable if it doesn't exist
 
 st.set_page_config(layout="wide")
 st.title("🧠 POS Anomaly Dashboard")
@@ -13,6 +21,8 @@ st.title("🧠 POS Anomaly Dashboard")
 # ---------------- API Endpoints ----------------
 API_BASE = os.getenv("API_URL", "http://flask_api:5000")
 TRANSACTIONS_ENDPOINT = f"{API_BASE}/anomaly_transaction/list"   # new endpoint to fetch recent txns
+TRANSACTIONS_ENDPOINT_ALL = f"{API_BASE}/anomaly_transaction"   # new endpoint to fetch recent txns
+REALTIME_COUNTERS_ENDPOINT = f"{API_BASE}/anomaly_transaction/real_time_counters"
 METRICS_ENDPOINT = f"{API_BASE}/metrics"             # anomaly metrics (historical)
 DOWNLOAD_ENDPOINT = f"{API_BASE}/download"           # anomaly csv download
 
@@ -24,6 +34,7 @@ def fetch_transactions(limit: int = 10, start_key=None, sort_order: str = "desc"
     """Fetch transactions from Flask API with DynamoDB pagination."""
     try:
         url = f"{TRANSACTIONS_ENDPOINT}?limit={limit}&sort_order={sort_order}"
+        # url = f"{TRANSACTIONS_ENDPOINT_ALL}"
         if start_key:
             # ✅ Ensure next_token is URL-safe
             url += f"&last_evaluated_key={quote(start_key)}"
@@ -34,7 +45,7 @@ def fetch_transactions(limit: int = 10, start_key=None, sort_order: str = "desc"
 
             # ✅ Build DataFrame from items
             df = pd.DataFrame(data.get("items", []))
-
+            # df = pd.DataFrame(data)
             # ✅ Normalize timestamps if present
             if not df.empty and "timestamp_initiated" in df.columns:
                 # Ensure numeric first to avoid FutureWarning
@@ -96,9 +107,260 @@ if page == "📡 Real-Time Dashboard":
     if "page_num" not in st.session_state:
         st.session_state.page_num = 1
 
-    # --- Auto refresh ---
-    refresh_rate = st.sidebar.slider("Auto-refresh (seconds)", 5, 60, 15)
-    st_autorefresh = st.sidebar.checkbox("🔄 Auto Refresh", value=True)
+    # -------------------------
+    # Iframe for audio
+    # -------------------------
+    if "iframe_rendered" not in st.session_state:
+        st.session_state.iframe_rendered = False
+
+    iframe_html = """
+       <iframe id="audioFrame" srcdoc='
+         <html>
+         <body style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%;">
+           <button id="unlockBtn">🔊 Enable Audio</button>
+           <audio id="beep" preload="auto">
+             <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" type="audio/ogg">
+           </audio>
+           <script>
+             const btn = document.getElementById("unlockBtn");
+             const audio = document.getElementById("beep");
+
+             btn.addEventListener("click", () => {
+               audio.play().then(() => {
+                 window.audioReady = true;
+                 alert("✅ Audio unlocked! You can now hear alerts.");
+               }).catch(e => alert("Audio blocked: " + e));
+             });
+
+             function playAnomaly(message){
+               if(window.audioReady){
+                 audio.currentTime = 0;
+                 audio.play().catch(e=>console.log("Beep error:", e));
+                 if(Notification.permission === "granted"){
+                   new Notification("🚨 Anomaly Detected", { body: message });
+                 } else if(Notification.permission !== "denied"){
+                   Notification.requestPermission().then(p => { 
+                     if(p==="granted") new Notification("🚨 Anomaly Detected",{ body: message }); 
+                   });
+                 }
+               }
+             }
+
+             window.addEventListener("message", (event) => {
+               if(event.data.type === "anomaly"){
+                 playAnomaly(event.data.message);
+               }
+             });
+           </script>
+         </body>
+         </html>
+       ' style="width:100%; height:150px; border:none;"></iframe>
+       """
+
+    if not st.session_state.iframe_rendered:
+        components.html(iframe_html, height=150)
+        st.session_state.iframe_rendered = True
+
+    # -------------------------
+    # Auto-refresh
+    # -------------------------
+    st_autorefresh(interval=10_000, key="anomaly_refresh")
+
+    # -------------------------
+    # State
+    # -------------------------
+    if "event_queue" not in st.session_state:
+        st.session_state.event_queue = queue.Queue()
+    if "anomalies_received" not in st.session_state:
+        st.session_state.anomalies_received = []
+    if "notified_txns" not in st.session_state:
+        st.session_state.notified_txns = set()
+    if "socket_started" not in st.session_state:
+        st.session_state.socket_started = False
+
+    event_queue = st.session_state.event_queue
+    notification_div = st.empty()
+
+    # -------------------------
+    # SocketIO client
+    # -------------------------
+    if not st.session_state.socket_started:
+        sio = socketio.Client(logger=False, engineio_logger=False)
+
+
+        @sio.event
+        def connect():
+            event_queue.put({"log": "✅ Connected to backend socket"})
+
+
+        @sio.on("anomaly_detected")
+        def on_anomaly(data):
+            event_queue.put({"anomaly": data})
+            # st.rerun()
+
+        def socket_thread():
+            try:
+                sio.connect(API_BASE)
+                sio.wait()
+            except Exception as e:
+                event_queue.put({"log": f"❌ SocketIO connection failed: {e}"})
+
+
+        threading.Thread(target=socket_thread, daemon=True).start()
+        st.session_state.socket_started = True
+
+
+    # -------------------------
+    # Process events
+    # -------------------------
+    def process_events():
+        while not event_queue.empty():
+            item = event_queue.get_nowait()
+            if "log" in item:
+                notification_div.markdown(f"<script>console.log({repr(item['log'])});</script>", unsafe_allow_html=True)
+            if "anomaly" in item:
+                txn = item["anomaly"]
+                txn_id = txn.get("transaction_id", "unknown")
+                if txn_id not in st.session_state.notified_txns:
+                    txn["received_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    st.session_state.anomalies_received.append(txn)
+                    st.session_state.notified_txns.add(txn_id)
+
+                    message = f"Txn {txn_id} flagged! Customer: {txn.get('customer_name', '')} Amount: {txn.get('transaction_amount', '')}"
+                    notification_div.markdown(f"""
+                    <script>
+                      const iframe = document.querySelector("iframe#audioFrame");
+                      function sendToIframe(){{
+                        if(iframe && iframe.contentWindow){{
+                          iframe.contentWindow.postMessage({{type:"anomaly", message:{message!r}}}, "*");
+                        }} else {{
+                          setTimeout(sendToIframe, 200);
+                        }}
+                      }}
+                      sendToIframe();
+                    </script>
+                    """, unsafe_allow_html=True)
+
+
+    process_events()
+
+    # -------------------------
+    # Display anomalies
+    # -------------------------
+    if st.session_state.anomalies_received:
+        st.markdown("""
+        <style>
+            .alert-box {
+                padding: 8px 12px;
+                margin-bottom: 10px;
+                border-radius: 8px;
+                background: #ffecec;
+                border: 1px solid #ffb3b3;
+            }
+            .alert-box div {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }
+            .alert-box img {
+                flex-shrink: 0;
+            }
+        </style>
+        """, unsafe_allow_html=True)
+
+        # -------------------------
+        # Display anomalies
+        # -------------------------
+        if st.session_state.anomalies_received:
+            st.markdown("""
+            <style>
+                .alert-box {
+                    padding: 8px 12px;
+                    margin-bottom: 10px;
+                    border-radius: 8px;
+                    background: #ffecec;
+                    border: 1px solid #ffb3b3;
+                }
+                .alert-box div {
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
+                }
+                .alert-box img {
+                    flex-shrink: 0;
+                }
+            </style>
+            """, unsafe_allow_html=True)
+
+        # Build one big HTML block instead of multiple isolated ones
+        html_content = """
+          <div style="display:flex; justify-content:flex-end; margin-bottom:10px;">
+              <button onclick="stopAllAlarms()"
+                      style="padding:6px 10px; border:none; border-radius:8px; background:#d9534f; color:white; cursor:pointer;">
+                  🔇
+              </button>
+          </div>
+          """
+
+        # Add anomalies with inline <audio>
+        for txn in reversed(st.session_state.anomalies_received[-10:]):
+            txn_id = txn.get("transaction_id", "")
+            txn_amount = txn.get("amount", "")
+            customer = txn.get('customer_name', '')
+            received_at = txn.get('received_at', '')
+
+            html_content += f"""
+              <div class="alert-box">
+                  <div class="alert-header">
+                      <img src="https://cdn-icons-png.flaticon.com/512/564/564619.png" width="32" />
+                      <strong>Txn ID:</strong> {txn_id}
+                      <strong>Amount:</strong> {txn_amount}
+                      <strong>Customer:</strong> {customer}
+                      <strong>DateTime:</strong> <em>{received_at}</em>
+                  </div>
+
+                  <!-- Inline audio -->
+                  <audio id="alarmSound_{txn_id}" autoplay>
+                      <source src="https://actions.google.com/sounds/v1/alarms/spaceship_alarm.ogg" type="audio/ogg">
+                  </audio>
+              </div>
+              """
+
+        # Add script + styles at the end
+        html_content += """
+          <script>
+          function stopAllAlarms() {
+              var audios = document.querySelectorAll("audio");
+              audios.forEach(audio => {
+                  audio.pause();
+                  audio.currentTime = 0;
+              });
+          }
+          </script>
+
+          <style>
+          .alert-box {
+              background-color: #ffecec;
+              border: 1px solid #f5c2c2;
+              border-radius: 10px;
+              padding: 10px;
+              margin: 8px 0;
+          }
+          .alert-header {
+              display: flex;
+              align-items: center;
+              gap: 12px;
+              flex-wrap: wrap;
+          }
+          </style>
+          """
+
+        # Render everything inside a single iframe
+        components.html(html_content, height=200, scrolling=True)
+
+    # # --- Auto refresh ---
+    # refresh_rate = st.sidebar.slider("Auto-refresh (seconds)", 5, 60, 15)
+    # st_autorefresh = st.sidebar.checkbox("🔄 Auto Refresh", value=True)
 
     # --- Fetch transactions with pagination ---
     df, next_key = fetch_transactions(limit=10, start_key=st.session_state.last_key)
@@ -107,68 +369,55 @@ if page == "📡 Real-Time Dashboard":
         st.warning("No transactions available yet.")
     else:
         # KPIs
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Transactions", len(df))
-        col2.metric("Anomalies", int(df["is_anomaly"].sum()) if "is_anomaly" in df else 0)
-        col3.metric("Avg Amount", round(df["transaction_amount"].mean(), 2))  # ✅ fixed key
+        # col1, col2, col3 = st.columns(3)
+        # col1.metric("Total Transactions", len(df))
+        # col2.metric("Anomalies", int(df["is_anomaly"].sum()) if "is_anomaly" in df else 0)
+        # col3.metric("Avg Amount", round(df["transaction_amount"].mean(), 2))  # ✅ fixed key
 
         # ================= LIVE ALERTS =================
-        st.markdown("### 🚨 Live Alerts")
-        alerts = df[df.get("is_anomaly", 0) == 1].sort_values(
-            "timestamp_initiated", ascending=False
-        )
-        if alerts.empty:
-            st.info("No live alerts detected.")
-        else:
-            for _, row in alerts.head(5).iterrows():
-                ts = row["timestamp_initiated"]
-                if pd.notna(ts):  # ✅ Only format valid timestamps
-                    ts = ts.strftime("%I:%M %p")
-                else:
-                    ts = "Unknown Time"
-                st.write(
-                    f"**{ts} — ALERT:** {row.get('anomaly_type', 'Unknown')} "
-                    f"at {row.get('store_name', 'N/A')}"
-                )
+        # st.markdown("### 🚨 Live Alerts")
+        # alerts = df[df.get("is_anomaly", 0) == 1].sort_values(
+        #     "timestamp_initiated", ascending=False
+        # )
+        # if alerts.empty:
+        #     st.info("No live alerts detected.")
+        # else:
+        #     for _, row in alerts.head(5).iterrows():
+        #         ts = row["timestamp_initiated"]
+        #         if pd.notna(ts):  # ✅ Only format valid timestamps
+        #             ts = ts.strftime("%I:%M %p")
+        #         else:
+        #             ts = "Unknown Time"
+        #         st.write(
+        #             f"**{ts} — ALERT:** {row.get('anomaly_type', 'Unknown')} "
+        #             f"at {row.get('store_name', 'N/A')}"
+        #         )
 
         # ---------------- Real-Time Counters ----------------
         st.markdown("### 📊 Real-Time Counters")
 
-        # Compute KPIs
-        # Get current UTC time
-        current_time = datetime.now(timezone.utc)
+        try:
+            response = requests.get(REALTIME_COUNTERS_ENDPOINT)  # adjust host/port if needed
+            if response.status_code == 200:
+                stats = response.json()
+            else:
+                st.error(f"Failed to fetch stats: {response.status_code}")
+                stats = {}
+        except Exception as e:
+            st.error(f"Error fetching stats: {e}")
+            stats = {}
 
-        # Compute KPIs
-        high_value = df[
-            (df.get("transaction_amount", 0) > 2000) &
-            (df["timestamp_initiated"] > current_time - timedelta(minutes=15))
-            ] if "transaction_amount" in df.columns else pd.DataFrame()
-
-        refunds_last_10 = df[
-            (df.get("transaction_status") == "REFUND") &
-            (df["timestamp_initiated"] > current_time - timedelta(minutes=10))
-            ] if "transaction_status" in df.columns else pd.DataFrame()
-
-        outside_hours = (
-            df[df["timestamp_initiated"].dt.hour.between(0, 6)]
-            if "timestamp_initiated" in df.columns
-            else pd.DataFrame()
-        )
-
-        manual_ratio = 0
-        if "entry_mode" in df.columns:
-            recent = df[df["timestamp_initiated"] > current_time - timedelta(hours=1)]
-            if not recent.empty:
-                manual_ratio = (
-                    recent["entry_mode"].eq("MANUAL").mean()
-                )
-                manual_ratio = round(manual_ratio * 100, 1) if not pd.isna(manual_ratio) else 0
+        # Extract values (fallback to 0 if missing)
+        high_value = stats.get("high_value_count", 0)
+        refunds_last_10 = stats.get("refunds_last_10_count", 0)
+        outside_hours = stats.get("outside_hours_count", 0)
+        manual_ratio = stats.get("manual_entry_ratio", 0)
 
         # Display as metric cards
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("High-value txns (15m)", len(high_value), "⚠ Above avg" if len(high_value) > 5 else "")
-        col2.metric("Refunds (10m)", len(refunds_last_10))
-        col3.metric("Outside store hours", len(outside_hours))
+        col1.metric("High-value txns (15m)", high_value, "⚠ Above avg" if high_value > 5 else "")
+        col2.metric("Refunds (10m)", refunds_last_10)
+        col3.metric("Outside store hours", outside_hours)
         col4.metric("Manual vs Chip/Tap (1h)", f"{manual_ratio}% manual", "⚠ High" if manual_ratio > 5 else "")
 
         # ================= TRANSACTIONS TABLE =================

@@ -29,7 +29,7 @@ class AnomalyTransaction:
     geo_location: str
     created_by: str
     created_at: int
-
+    entry_mode: str
     # anomaly detection specific
     is_anomaly: bool = False
     detections: List[dict] = None
@@ -68,6 +68,7 @@ class AnomalyTransaction:
             "geo_location": transaction.geo_location,
             "created_by": transaction.created_by,
             "created_at": transaction.created_at,
+            "entry_mode": transaction.entry_mode,
             "is_anomaly": transaction.is_anomaly,
             "detections": transaction.detections or [],
             "anomaly_type": transaction.anomaly_type,
@@ -106,6 +107,7 @@ class AnomalyTransaction:
             geo_location=item.get("geo_location", ""),
             created_by=item.get("created_by", ""),
             created_at=item.get("created_at"),
+            entry_mode=item.get("entry_mode"),
             is_anomaly=item.get("is_anomaly", False),
             detections=item.get("detections", []),
             anomaly_type=item.get("anomaly_type"),

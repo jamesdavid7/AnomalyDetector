@@ -112,3 +112,49 @@ class AnomalyTransactionRepository:
             return AnomalyTransaction.from_item(items[0]) if items else None
         except Exception as e:
             raise Exception(f"DynamoDB scan error: {str(e)}")
+
+
+    def scan_with_filters(self, filters: dict):
+        """
+        Scan table with filters.
+
+        filters example:
+        {
+            "transaction_amount": {"gt": 2000},
+            "timestamp_initiated": {"gt": 1693500000},
+            "transaction_status": {"eq": "REFUND"}
+        }
+        """
+        filter_expression = None
+
+        for field, condition in filters.items():
+            for op, value in condition.items():
+                if op == "eq":
+                    expr = Attr(field).eq(value)
+                elif op == "gt":
+                    expr = Attr(field).gt(value)
+                elif op == "gte":
+                    expr = Attr(field).gte(value)
+                elif op == "lt":
+                    expr = Attr(field).lt(value)
+                elif op == "lte":
+                    expr = Attr(field).lte(value)
+                else:
+                    raise ValueError(f"Unsupported operator: {op}")
+
+                if filter_expression is None:
+                    filter_expression = expr
+                else:
+                    filter_expression = filter_expression & expr
+
+        response = self.table.scan(FilterExpression=filter_expression)
+        items = response.get("Items", [])
+
+        while "LastEvaluatedKey" in response:
+            response = self.table.scan(
+                FilterExpression=filter_expression,
+                ExclusiveStartKey=response["LastEvaluatedKey"]
+            )
+            items.extend(response.get("Items", []))
+
+        return items
