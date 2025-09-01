@@ -44,21 +44,13 @@ encoder = joblib.load("mlartifact/categorical_encoder.pkl")
 scaler = joblib.load("mlartifact/scaler.pkl")
 training_stats = joblib.load("mlartifact/training_stats.pkl")  # dict with mean/std per column
 
-feature_cols = [
-    'amount', 'banking_charge', 'transaction_duration',
-    'timestamp_initiated_epoch', 'timestamp_completed_epoch',
-    'card_type_code', 'currency_code', 'terminal_currency_code'
-]
+
 numeric_cols = [
-    'amount', 'banking_charge', 'transaction_duration',
-    'timestamp_initiated_epoch', 'timestamp_completed_epoch'
+    'amount', 'banking_charge', 'transaction_duration'
 ]
 cat_cols = ['card_type', 'currency', 'terminal_currency']
 
 feature_cols = numeric_cols + [c + "_code" for c in cat_cols]
-subscriptions = []
-
-
 
 @app.route('/run-anomaly-detection', methods=['GET'])
 def run_detection():
@@ -178,27 +170,12 @@ def prepare_features(txn,encoder):
         df[col] = df[col].astype(str)
         df[col + "_code"] = df[col].apply(lambda x: int(encoder[col].get(x, -1)))
 
-    # Convert timestamps safely
-    df['timestamp_initiated'] = pd.to_datetime(df['timestamp_initiated'], errors='coerce').fillna(pd.Timestamp.now())
-    df['timestamp_completed'] = pd.to_datetime(df['timestamp_completed'], errors='coerce').fillna(pd.Timestamp.now())
-
-    df['timestamp_initiated_epoch'] = df['timestamp_initiated'].apply(lambda x: int(x.timestamp()))
-    df['timestamp_completed_epoch'] = df['timestamp_completed'].apply(lambda x: int(x.timestamp()))
-    df['transaction_duration'] = (df['timestamp_completed_epoch'] - df['timestamp_initiated_epoch']) / 60
-
-    # define feature columns here
-    feature_cols = [
-        'amount', 'banking_charge', 'transaction_duration',
-        'timestamp_initiated_epoch', 'timestamp_completed_epoch',
-        'card_type_code', 'currency_code', 'terminal_currency_code'
-    ]
     # ensure all exist
     for col in feature_cols:
         if col not in df:
             df[col] = -1
 
     return df[feature_cols].fillna(0)
-
 
 
 def feature_anomaly_reason(txn, features):

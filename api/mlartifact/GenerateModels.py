@@ -17,16 +17,19 @@ fake = Faker()
 # ----------------------------------------
 def generate_base_transaction(anomaly=False):
     timestamp_initiated = fake.date_time_between(start_date='-30d', end_date='now')
-    duration_min = random.randint(1, 120)
-    timestamp_completed = timestamp_initiated + timedelta(minutes=duration_min)
+    duration_min = random.randint(1, 120)  # normal range
     amount = round(random.uniform(100, 5000), 2)
     banking_charge = round(amount * 0.01, 2)
 
-    # Inject anomaly if requested
+    # normal transaction
+    timestamp_completed = timestamp_initiated + timedelta(minutes=duration_min)
+
+    # Inject anomaly
     if anomaly:
+        # Amount anomaly
         amount *= random.uniform(5, 10)
         banking_charge *= random.uniform(5, 10)
-        duration_min *= random.uniform(2, 5)
+        duration_min = random.randint(0, 1)        # almost instant anomaly
         timestamp_completed = timestamp_initiated + timedelta(minutes=duration_min)
 
     return {
@@ -56,7 +59,7 @@ def generate_base_transaction(anomaly=False):
 # Generate Training Data
 # ----------------------------------------
 transactions = [generate_base_transaction() for _ in range(480)]
-transactions += [generate_base_transaction(anomaly=True) for _ in range(20)]
+transactions += [generate_base_transaction(anomaly=True) for _ in range(100)]
 df = pd.DataFrame(transactions)
 
 # ----------------------------------------
@@ -84,7 +87,6 @@ df['transaction_duration'] = (df['timestamp_completed_epoch'] - df['timestamp_in
 # ----------------------------------------
 feature_cols = [
     'amount', 'banking_charge', 'transaction_duration',
-    'timestamp_initiated_epoch', 'timestamp_completed_epoch',
     'card_type_code', 'currency_code', 'terminal_currency_code'
 ]
 
@@ -96,7 +98,7 @@ labels = df['is_anomaly'].astype(int)
 # ----------------------------------------
 training_stats = {}
 for col in feature_cols:
-    series = pd.Series(features[col]).astype(float)  # ensure Series
+    series = pd.Series(features[col]).astype(float)
     training_stats[col] = {
         'mean': series.mean(),
         'std': series.std()
@@ -115,14 +117,14 @@ joblib.dump(scaler, "scaler.pkl")
 # ----------------------------------------
 # Train Random Forest
 # ----------------------------------------
-rf_model = RandomForestClassifier(n_estimators=200, random_state=42)
+rf_model = RandomForestClassifier(n_estimators=300, random_state=42, class_weight="balanced")
 rf_model.fit(features, labels)
 joblib.dump(rf_model, "random_forest_model_all_params.pkl")
 
 # ----------------------------------------
 # Train Isolation Forest
 # ----------------------------------------
-iso_model = IsolationForest(contamination=0.05, n_estimators=100, random_state=42)
+iso_model = IsolationForest(contamination=0.1, n_estimators=100, random_state=42)
 iso_model.fit(features_scaled)
 joblib.dump(iso_model, "isolation_forest_model_all_params.pkl")
 

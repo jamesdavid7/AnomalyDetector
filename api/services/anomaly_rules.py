@@ -1,7 +1,7 @@
 from datetime import datetime
 from geopy.distance import geodesic
 
-HIGH_AMOUNT_THRESHOLD = 4000
+HIGH_AMOUNT_THRESHOLD = 400000
 
 def add_anomaly(txn, anomaly_type, reason=None):
     txn.setdefault("detections", [])
