@@ -2,9 +2,12 @@
 import json
 import os
 import traceback
-from datetime import datetime, timedelta
+from collections import Counter
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
+from dateutil.parser import parser
+#
 os.environ["EVENTLET_NO_GREENDNS"] = "yes"
 import eventlet
 from api.services.openAIAnalysis import analyze_transaction
@@ -18,7 +21,7 @@ from api.dynamodb.anomaly_transaction_repo import AnomalyTransactionRepository
 from api.models.anomaly_transaction import AnomalyTransaction
 from api.utils import ses_utils
 from config.constatns import S3_BUCKET_NAME, PROCESSED_DATA_DIR, TABLE_ANOMALY_METRICS, INPUT_DATA_DIR, \
-    TABLE_ANOMALY_TRANSACTION
+    TABLE_ANOMALY_TRANSACTION, TABLE_BATCH_ANOMALY_TRANSACTION
 from dynamodb.metric_data import MetricDataRepo
 from flask import Flask, jsonify, request
 from flask import send_file
@@ -31,6 +34,9 @@ from services.anomaly_detector_updated import process_csv_from_s3
 from services.anomaly_rules import anomaly_rules
 from services.csv_generation import save_transactions_to_csv
 from utils.s3_utils import S3Utils
+from api.dynamodb.batch_anomaly_transaction_repo import BatchAnomalyTransactionRepository
+from api.models.batch_anomaly_transaction import BatchAnomalyTransaction
+from api.utils.common_utils import safe_to_epoch, to_dt_utc
 
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*")  # allow Streamlit to connect
@@ -319,7 +325,7 @@ def get_all_anomaly_transactions():
         app.logger.error(str(e))
         return jsonify({"error": str(e)}), 500
 
-@app.route('/anomaly_transaction/<transaction_id>', methods=['GET'])
+@app.route('/anomaly_transaction/id/<transaction_id>', methods=['GET'])
 def get_anomaly_transaction_by_id(transaction_id):
     try:
         trans_repo = AnomalyTransactionRepository(TABLE_ANOMALY_TRANSACTION)
@@ -431,31 +437,58 @@ def get_paginated_anomaly_transactions():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-def safe_to_epoch(ts):
-    """
-    Convert a timestamp (ISO string, datetime, or epoch number) to epoch milliseconds (int).
-    """
+@app.route("/batch_anomaly_transaction/list", methods=['GET'])
+def get_paginated_batch_anomaly_transactions():
     try:
-        if ts is None:
-            return int(datetime.utcnow().timestamp() * 1000)
+        limit = int(request.args.get("limit", 10))
+        sort_order = request.args.get("sort_order", "desc")  # "asc" or "desc"
+        last_evaluated_key = request.args.get("last_evaluated_key")
 
-        if isinstance(ts, (int, float)):
-            # If already looks like epoch millis (13 digits), just return it
-            if ts > 1e12:
-                return int(ts)
-            # If epoch seconds, convert to millis
-            return int(ts * 1000)
+        # Convert token back to dict
+        lek = json.loads(last_evaluated_key) if last_evaluated_key else None
 
-        if isinstance(ts, datetime):
-            return int(ts.timestamp() * 1000)
+        # Fetch from DynamoDB
+        trans_repo = BatchAnomalyTransactionRepository(TABLE_BATCH_ANOMALY_TRANSACTION)
+        transactions, next_key = trans_repo.get_paginated_items(
+            limit=limit,
+            last_evaluated_key=lek,
+            sort_order=sort_order
+        )
 
-        # Parse ISO-like string
-        ts = ts.replace("T:", "T")  # fix formatting if needed
-        return int(datetime.fromisoformat(ts).timestamp() * 1000)
+        return jsonify({
+            "items": [BatchAnomalyTransaction.to_item(tx) for tx in transactions],
+            "next_token": json.dumps(clean_decimals(next_key)) if next_key else None
+        })
 
-    except Exception:
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/batch_anomaly_transactions/metrics', methods=['GET'])
+def get_batch_anomaly_metrics():
+    try:
+        repo = BatchAnomalyTransactionRepository()
+        all_txns = repo.get_all_items()
+        now = datetime.now(timezone.utc)
+
+        def filter_and_count(since_dt: datetime):
+            filtered = []
+            for txn in all_txns:
+                created_dt = to_dt_utc(getattr(txn, "timestamp_initiated", None))
+                if created_dt and created_dt >= since_dt and getattr(txn, "is_anomaly", False):
+                    filtered.append(txn)
+
+            counter = Counter([(getattr(txn, "anomaly_type", None) or "unknown") for txn in filtered])
+            return dict(counter)
+
+        return jsonify({
+            "last_24h": filter_and_count(now - timedelta(hours=24)),
+            "last_week": filter_and_count(now - timedelta(days=7)),
+            "last_month": filter_and_count(now - timedelta(days=30)),
+        }), 200
+
+    except Exception as e:
         print(traceback.format_exc())
-        return int(datetime.utcnow().timestamp() * 1000)
+        return jsonify({"error": str(e)}), 500
 
 def bucketize(ts: int, bucket: str) -> int:
     """

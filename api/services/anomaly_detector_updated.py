@@ -19,6 +19,7 @@ from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import MinMaxScaler
 import shap
 
+from api.utils.common_utils import safe_to_epoch
 
 app = Flask(__name__)
 
@@ -188,14 +189,14 @@ def process_csv_from_s3(bucket, key):
             transaction_amount=Decimal(str(row.get("amount", 0))),
             transaction_status=row.get("transaction_status"),
             currency=row.get("currency"),
-            timestamp_initiated=(row.get("timestamp_initiated")),
-            timestamp_completed=(row.get("timestamp_completed")),
+            timestamp_initiated=safe_to_epoch((row.get("timestamp_initiated"))),
+            timestamp_completed=safe_to_epoch((row.get("timestamp_completed"))),
             retry_count=int(row.get("retry_count", 0)),
             device_id=row.get("device_id"),
             ip_address=row.get("ip_address"),
             geo_location=row.get("geo_location"),
             created_by=row.get("created_by"),
-            created_at=(row.get("created_at")),
+            created_at=safe_to_epoch((row.get("created_at"))),
             is_anomaly=row.get("iso_anomaly",False),
             detections=row.get("iso_anomaly_reason",None),
             anomaly_type=anomaly_type,
