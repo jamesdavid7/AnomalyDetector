@@ -1,7 +1,17 @@
 from datetime import datetime
 from geopy.distance import geodesic
+import pandas as pd
+
 
 HIGH_AMOUNT_THRESHOLD = 400000
+
+
+def safe_to_epoch(ts):
+    if isinstance(ts, str):
+        return int(datetime.fromisoformat(ts.replace("Z", "")).timestamp())
+    elif isinstance(ts, datetime):
+        return int(ts.timestamp())
+    return int(ts)  # already epoch
 
 def add_anomaly(txn, anomaly_type, reason=None):
     txn.setdefault("detections", [])
@@ -72,11 +82,73 @@ def inject_geo_location(txn, max_distance_km=50):
 
     return txn
 
+
+import pandas as pd
+
+def rule_short_duration(txn, min_duration=5):
+    # Parse timestamps
+    initiated = pd.to_datetime(str(txn.get("timestamp_initiated")), errors="coerce")
+    completed = pd.to_datetime(str(txn.get("timestamp_completed")), errors="coerce")
+
+    # Fallbacks if parsing fails
+    if pd.isna(initiated):
+        initiated = pd.Timestamp.now()
+    if pd.isna(completed):
+        completed = pd.Timestamp.now()
+
+    # Compute duration in minutes
+    duration_min = (completed - initiated).total_seconds() / 60.0
+
+    # Save back to txn
+    txn["timestamp_initiated_epoch"] = int(initiated.timestamp())
+    txn["timestamp_completed_epoch"] = int(completed.timestamp())
+
+    # Apply rule
+    if duration_min < min_duration:
+        txn.setdefault("detections", []).append({
+            "anomaly_type": "SHORT_DURATION",
+            "value": duration_min,
+            "threshold": min_duration,
+            "message": f"Transaction too short: {duration_min:.1f} min < {min_duration} min"
+        })
+
+    return txn
+
+
+def rule_long_duration(txn, max_duration=1440):  # 24h
+    # Parse timestamps
+    initiated = pd.to_datetime(str(txn.get("timestamp_initiated")), errors="coerce")
+    completed = pd.to_datetime(str(txn.get("timestamp_completed")), errors="coerce")
+
+    # Fallbacks if parsing fails
+    if pd.isna(initiated):
+        initiated = pd.Timestamp.now()
+    if pd.isna(completed):
+        completed = pd.Timestamp.now()
+
+    # Compute duration in minutes
+    duration_min = (completed - initiated).total_seconds() / 60.0
+
+    # Save back to txn
+    txn["timestamp_initiated_epoch"] = int(initiated.timestamp())
+    txn["timestamp_completed_epoch"] = int(completed.timestamp())
+
+    if duration_min > max_duration:
+        txn.setdefault("detections", []).append({
+            "anomaly_type": "LONG_DURATION",
+            "value": duration_min,
+            "threshold": max_duration,
+            "message": f"Transaction too long: {duration_min:.1f} min > {max_duration} min"
+        })
+    return txn
+
 # List of rules
 anomaly_rules = [
     inject_rule_high_amount,
     inject_rule_currency_mismatch,
     inject_rule_card_expiring_with_high_amount,
     inject_ip_address,
-    inject_geo_location
+    inject_geo_location,
+    rule_long_duration,
+    rule_short_duration
 ]
