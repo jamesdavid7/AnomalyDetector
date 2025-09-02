@@ -11,7 +11,7 @@ from api.config.aws_config import AWSConfig
 from api.config.constatns import PROCESSED_DATA_DIR
 
 SENDER = "jamesdavidbe@gmail.com"
-RECIPIENTS = ["jamesdavidbe@gmail.com", "smtdhinesh@gmail.com"]
+RECIPIENTS = ["jamesdavidbe@gmail.com", "smtdhinesh@gmail.com","sathishbabu999@gmail.com","lakshmiijw@gmail.com"]
 PASSWORD = "Admin@123"
 EMAIL_SUBJECT = "Anomaly Detection Report"
 EMAIL_BODY = f"""Hello,
