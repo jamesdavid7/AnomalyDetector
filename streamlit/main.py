@@ -1,6 +1,10 @@
 import streamlit as st
 
-st.set_page_config(page_title="Anomaly Detector", page_icon="📊")
+# 🔄 Redirect immediately to your preferred page
+DEFAULT_PAGE = "Dashboard"   # <-- replace with your filename inside /pages
 
-st.title("📊 Anomaly Detector App")
-st.markdown("Welcome! Use the sidebar to switch between **Anomaly Dashboard** and **Settlement Dashboard**.")
+st.set_page_config(layout="wide")
+
+st.markdown(f"""
+    <meta http-equiv="refresh" content="0; url=/{DEFAULT_PAGE}">
+""", unsafe_allow_html=True)

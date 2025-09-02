@@ -79,13 +79,11 @@ def fetch_settlement_transactions(limit: int = 10, start_key=None, sort_order: s
 
             # ✅ Build DataFrame from items
             settlement_df = pd.DataFrame(data.get("items", []))
-
             # df = pd.DataFrame(data)
             # ✅ Normalize timestamps if present
             if not settlement_df.empty and "timestamp_initiated" in settlement_df.columns:
                 # Ensure numeric first to avoid FutureWarning
-                #print(settlement_df["timestamp_initiated"])
-                settlement_df["timestamp_initiated"] = pd.to_datetime(
+                settlement_df["timestamp_initiated"] =  pd.to_datetime(
                     pd.to_numeric(settlement_df["timestamp_initiated"], errors="coerce"),
                     unit="ms",
                     utc=True
@@ -129,12 +127,22 @@ store_meta = load_store_metadata()
 
 # ---------------- Sidebar Navigation ----------------
 page = st.sidebar.radio("📑 Select View", ["📡 Real-Time Dashboard"])
+# ---------------- Sidebar Navigation ----------------
+st.sidebar.markdown("## 🔗 Navigation")
+st.sidebar.markdown("""
+- [📡 Live Transactions & Metrics](#live-transactions--metrics)
+- [📡 Real-Time Counters](#real-time-counters)
+- [📝 Transactions](#transactions)
+- [📄 Settlement Anomaly Transactions](#settlement-transactions)
+- [📊 Settlement Metrics](#settlement-metrics)
+""", unsafe_allow_html=True)
 
 
 # ===================================================
 # PAGE 1: REAL-TIME DASHBOARD (with pagination + alerts + counters)
 # ===================================================
 if page == "📡 Real-Time Dashboard":
+    st.markdown("<a name='live-transactions--metrics'></a>", unsafe_allow_html=True)
     st.subheader("📡 Live Transactions & Metrics")
 
     # --- Pagination state ---
@@ -202,7 +210,7 @@ if page == "📡 Real-Time Dashboard":
     # -------------------------
     # Auto-refresh
     # -------------------------
-    st_autorefresh(interval=10_000, key="anomaly_refresh")
+    st_autorefresh(interval=15_000, key="anomaly_refresh")
 
     # -------------------------
     # State
@@ -234,7 +242,6 @@ if page == "📡 Real-Time Dashboard":
         @sio.on("anomaly_detected")
         def on_anomaly(data):
             event_queue.put({"anomaly": data})
-            # st.rerun()
 
         def socket_thread():
             try:
@@ -432,6 +439,7 @@ if page == "📡 Real-Time Dashboard":
         #         )
 
         # ---------------- Real-Time Counters ----------------
+        st.markdown("<a name='real-time-counters'></a>", unsafe_allow_html=True)
         st.markdown("### 📊 Real-Time Counters")
 
         try:
@@ -580,6 +588,7 @@ if page == "📡 Real-Time Dashboard":
     # 📆 Batch METRICS PANEL (Today / Last 24 Hours)
     # ===================================================
     # Paginated transactions
+    st.markdown("<a name='settlement-transactions'></a>", unsafe_allow_html=True)
     st.header("📄 Settlement Anomaly Transactions")
     if "s_last_key" not in st.session_state:
         st.session_state.s_last_key = None
@@ -715,6 +724,7 @@ if page == "📡 Real-Time Dashboard":
             st.session_state.s_scroll_to_table = False
 
     # Metrics
+    st.markdown("<a name='settlement-metrics'></a>", unsafe_allow_html=True)
     st.header("📊 Settlement Metrics")
     metrics = requests.get(f"{API_BASE}/batch_anomaly_transactions/metrics").json()
 

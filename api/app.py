@@ -464,6 +464,7 @@ def get_paginated_batch_anomaly_transactions():
         })
 
     except Exception as e:
+        print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
 @app.route('/batch_anomaly_transactions/metrics', methods=['GET'])
