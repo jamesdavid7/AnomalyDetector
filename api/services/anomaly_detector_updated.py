@@ -257,7 +257,9 @@ def process_csv_from_s3(bucket, key):
     s3.upload_file(output_file, bucket, output_key)
     print(f"✅ Uploaded to s3://{bucket}/{output_key}")
 
-    return output_file_key
+    print("output_file"+output_file)
+
+    return output_file
 
 
 if __name__ == "__main__":
