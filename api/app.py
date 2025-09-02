@@ -147,6 +147,9 @@ def process_anomaly():
         bucket = data["bucket"]
         key = data["key"]
         result_key = process_csv_from_s3(bucket, key)
+        s3_utils = S3Utils(bucket_name=S3_BUCKET_NAME)
+        s3_utils.send_file_to_s3(result_key, PROCESSED_DATA_DIR)
+        ses_utils.process_and_send_file(result_key)
         return jsonify({"status": "success", "processed_key": result_key}), 200
     except Exception as e:
         print("Error:", str(e))
