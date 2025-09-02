@@ -253,10 +253,11 @@ def process_csv_from_s3(bucket, key):
     db = MetricDataRepo(TABLE_ANOMALY_METRICS)
     db.insert_item(metric)
 
+    output_file_key = os.path.join(tempfile.gettempdir(), filename)
     s3.upload_file(output_file, bucket, output_key)
     print(f"✅ Uploaded to s3://{bucket}/{output_key}")
 
-    return output_key
+    return output_file_key
 
 
 if __name__ == "__main__":
