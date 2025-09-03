@@ -61,18 +61,7 @@ def generate_base_transaction(label=False, anomaly_type="NORMAL"):
         'anomaly_type': anomaly_type
     }
 
-# ------------------ Rules ------------------
-def inject_rule_1(data):
-    base = generate_base_transaction(True, "duplicate_transaction")
-    duplicate = base.copy()
-    # Force same fields for duplication
-    duplicate['card_number'] = base['card_number']
-    duplicate['amount'] = base['amount']
-    duplicate['device_id'] = base['device_id']
-    duplicate['merchant_name'] = base['merchant_name']
-    duplicate['timestamp_completed'] = base['timestamp_completed']
-    data.append(base)
-    data.append(duplicate)
+
 
 def inject_rule_2(data):
     t = generate_base_transaction(True, "voided_but_not_settled")
@@ -130,7 +119,7 @@ def generate_dataset(output_dir="input"):
         data.append(generate_base_transaction(False))
 
     # Anomalies using rules
-    injectors = [inject_rule_1, inject_rule_2, inject_rule_3, inject_rule_4, inject_rule_5]
+    injectors = [inject_rule_2, inject_rule_3, inject_rule_4, inject_rule_5]
     while len([d for d in data if d["anomaly_type"] != "NORMAL"]) < num_anomalies:
         rule = random.choice(injectors + [lambda d: inject_hidden_anomalies(d, 1)])
         rule(data)
