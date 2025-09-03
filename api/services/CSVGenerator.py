@@ -107,7 +107,7 @@ def inject_hidden_anomalies(data, count):
 # ------------------ Generator ------------------
 def generate_dataset(output_dir="input"):
     os.makedirs(output_dir, exist_ok=True)
-    num_records = 1000
+    num_records = 500
     anomaly_ratio = 0.6
     num_anomalies = int(num_records * anomaly_ratio)
     num_normals = num_records - num_anomalies
