@@ -85,37 +85,9 @@ def inject_geo_location(txn, max_distance_km=50):
 
 import pandas as pd
 
-def rule_short_duration(txn, min_duration=5):
-    # Parse timestamps
-    initiated = pd.to_datetime(str(txn.get("timestamp_initiated")), errors="coerce")
-    completed = pd.to_datetime(str(txn.get("timestamp_completed")), errors="coerce")
-
-    # Fallbacks if parsing fails
-    if pd.isna(initiated):
-        initiated = pd.Timestamp.now()
-    if pd.isna(completed):
-        completed = pd.Timestamp.now()
-
-    # Compute duration in minutes
-    duration_min = (completed - initiated).total_seconds() / 60.0
-
-    # Save back to txn
-    txn["timestamp_initiated_epoch"] = int(initiated.timestamp())
-    txn["timestamp_completed_epoch"] = int(completed.timestamp())
-
-    # Apply rule
-    if duration_min < min_duration:
-        txn.setdefault("detections", []).append({
-            "anomaly_type": "SHORT_DURATION",
-            "value": duration_min,
-            "threshold": min_duration,
-            "message": f"Transaction too short: {duration_min:.1f} min < {min_duration} min"
-        })
-
-    return txn
 
 
-def rule_long_duration(txn, max_duration=1440):  # 24h
+def rule_long_duration(txn, max_duration=5):  # 24h
     # Parse timestamps
     initiated = pd.to_datetime(str(txn.get("timestamp_initiated")), errors="coerce")
     completed = pd.to_datetime(str(txn.get("timestamp_completed")), errors="coerce")
@@ -149,6 +121,5 @@ anomaly_rules = [
     inject_rule_card_expiring_with_high_amount,
     inject_ip_address,
     inject_geo_location,
-    rule_long_duration,
-    rule_short_duration
+    rule_long_duration
 ]

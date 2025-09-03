@@ -10,8 +10,9 @@ fake = Faker()
 
 # ------------------ Base Transaction ------------------
 def generate_base_transaction(label=False, anomaly_type="NORMAL"):
-    timestamp_initiated = fake.date_time_between(start_date='-30d', end_date='now')
-    duration_min = random.randint(1, 120)
+    timestamp_initiated = datetime.now()
+    # Duration between 1 and 2 mins
+    duration_min = random.randint(1, 2)
     timestamp_completed = timestamp_initiated + timedelta(minutes=duration_min)
     amount = round(random.uniform(100, 5000), 2)
     banking_charge = round(amount * 0.01, 2)
