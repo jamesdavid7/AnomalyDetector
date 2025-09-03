@@ -599,7 +599,7 @@ if page == "📡 Real-Time Dashboard":
     # --- Fetch transactions with pagination ---
     settlement_df, s_next_key = fetch_settlement_transactions(limit=10, start_key=st.session_state.s_last_key)
 
-    if df.empty:
+    if settlement_df.empty:
         st.warning("No settlement transactions available yet.")
     else:
         st.markdown("<a name='settlement_transactions'></a>", unsafe_allow_html=True)  # anchor at top of table
