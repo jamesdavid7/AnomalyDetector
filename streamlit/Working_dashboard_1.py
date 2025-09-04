@@ -6,7 +6,7 @@ import os
 from datetime import datetime, UTC
 
 st.set_page_config(layout="wide")
-st.title("🧠 POS Anomaly Dashboard")
+st.title("💰 POS Anomaly Dashboard ⏱️")
 
 # ---------------- API Endpoints ----------------
 API_BASE = os.getenv("API_URL", "http://flask_api:5000")

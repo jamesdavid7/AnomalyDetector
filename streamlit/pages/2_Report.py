@@ -5,7 +5,7 @@ import plotly.express as px
 import os
 
 st.set_page_config(layout="wide")
-st.title("🧠 POS Anomaly Dashboard")
+st.title("💰 POS Anomaly Dashboard ⏱️")
 
 API_BASE = os.getenv("API_URL", "http://flask_api:5000")
 METRICS_ENDPOINT = f"{API_BASE}/metrics"
