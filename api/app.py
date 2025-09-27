@@ -6,7 +6,8 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from dateutil.parser import parser
+import numpy as np
+from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score
 #
 os.environ["EVENTLET_NO_GREENDNS"] = "yes"
 import eventlet
@@ -209,6 +210,15 @@ def feature_anomaly_reason(txn, features):
         # Only join if there are reasons
     return "; ".join(reasons) if reasons else None
 anomalies = []
+CATEGORICAL_FEATURES = ['card_type', 'currency', 'terminal_currency', 'merchant_name', 'store_name']
+def encode_txn(txn, encoder):
+    for col in CATEGORICAL_FEATURES:
+        txn[col+'_code'] = encoder[col].get(txn.get(col), -1)
+    return txn
+
+print(type(encoder))                 # should be dict
+print({k: type(v) for k,v in encoder.items()})
+
 @app.route("/transactions/detect-anomaly", methods=["POST"])
 def detect_single_anomaly():
 
@@ -228,11 +238,11 @@ def detect_single_anomaly():
         features = prepare_features(txn,encoder)
         features_scaled = scaler.transform(features)
 
-        rf_pred = rf_model.predict(features)[0]
+        rf_pred = rf_model.predict(features)
         rf_proba = rf_model.predict_proba(features)[0]
         rf_score = float(rf_proba[1]) if len(rf_proba) > 1 else 0.0
 
-        iso_pred = iso_model.predict(features_scaled)[0]
+        iso_pred = iso_model.predict(features_scaled)
         iso_score = -iso_model.score_samples(features_scaled)[0]
 
         model_detections = []
@@ -243,12 +253,46 @@ def detect_single_anomaly():
             reason = feature_anomaly_reason(txn, features)
             model_detections.append(("ML_ISO", iso_score, reason))
 
+        print("rf_pred :", rf_pred)
+        print("rf_score :", rf_score)
+        print("iso_pred :", iso_pred)
+        print("iso_score :", iso_score)
+        # # Compute transaction_duration
+        # txn['transaction_duration'] = (pd.to_datetime(txn['timestamp_completed']) -
+        #                                pd.to_datetime(txn['timestamp_initiated'])).dt.total_seconds() / 60.0
+
+        txn_encoded = encode_txn(txn, encoder)
+        txn_df = pd.DataFrame([txn_encoded])
+
+        # Fit scaler on historical data
+        # SCALER = StandardScaler()
+        # SCALER.fit(FEATURES_HISTORICAL[numeric_cols])
+        # X_features = txn_df[numeric_cols]
+        # X_scaled = SCALER.transform(X_features)
+
+        print("\n[DEBUG] Transaction DataFrame:")
+        print(txn_df.to_string(index=False))
+
+        # y_true = txn_df["is_anomaly"].astype(int)
+        # X_val, X_val_scaled = preprocess_transaction(txn_df)  # same pipeline
+        features, features_scaled = preprocess_transaction(txn_df)
+
+
+
         if model_detections:
             best_model = max(model_detections, key=lambda x: x[1])
             if best_model[2]:
                 detections.append({
                 "reason": best_model[2]
             })
+
+            y_true_array = np.array([len(detections) > 0])
+
+            rf_precision = precision_score(y_true_array, rf_pred)
+            print("RF Precision:", rf_precision)
+            print("RF Recall:", recall_score(y_true_array, rf_pred))
+            print("RF F1:", f1_score(y_true_array, rf_pred))
+            print("ISO AUC:", roc_auc_score(y_true_array, iso_pred))
 
             # Build transaction
             transaction = AnomalyTransaction(
@@ -279,7 +323,15 @@ def detect_single_anomaly():
                 created_at=safe_to_epoch(txn.get("created_at")),
                 entry_mode=txn.get("entry_mode"),
                 is_anomaly=len(detections) > 0,
-                detections=detections
+                detections=detections,
+                anomaly_score= rf_score if len(detections) > 0 else 0.0
+            )
+
+            str_reasons = ", ".join(d['reason'] for d in transaction.detections)
+            print("str_reasons : "+str_reasons)
+            message = (
+                f"Transaction flagged as anomalous by (score={rf_score}, precision={rf_precision}). "
+                f"Reason(s): {str_reasons}."
             )
 
             # ✅ If anomaly detected → call OpenAI to enrich details
@@ -299,7 +351,7 @@ def detect_single_anomaly():
                     {
                         "transaction_id": transaction.transaction_id,
                         "customer_name": transaction.customer_name,
-                        "amount": transaction.transaction_amount
+                        "reason": message
                     },
                 )
                 print(f"🚨 Anomaly detected and enriched: {transaction.transaction_id}")
@@ -318,6 +370,25 @@ def detect_single_anomaly():
             "error": str(e),
             "trace": traceback.format_exc()
         }), 500
+def preprocess_transaction(df):
+    for col in cat_cols:
+        df[col] = df[col].apply(lambda x: encoder[col].get(x, -1))
+        df[col] = df[col].astype(int)
+        df[col + "_code"] = df[col]
+
+    # Convert timestamps to duration
+    df['timestamp_initiated'] = pd.to_datetime(df['timestamp_initiated'], errors='coerce')
+    df['timestamp_completed'] = pd.to_datetime(df['timestamp_completed'], errors='coerce')
+    df['transaction_duration'] = (
+        (df['timestamp_completed'] - df['timestamp_initiated']).dt.total_seconds() / 60
+    )
+
+    features = df[feature_cols].fillna(0)
+
+    # Scale for Isolation Forest
+    features_scaled = scaler.transform(features)
+
+    return features, features_scaled
 
 @app.route('/anomaly_transaction', methods=['GET'])
 def get_all_anomaly_transactions():

@@ -69,8 +69,9 @@ cat_cols = ['card_type','currency','terminal_currency','merchant_name','store_na
 encoder = {}
 for col in cat_cols:
     df[col] = df[col].astype('category')
-    encoder[col] = dict(zip(df[col].cat.categories, range(len(df[col].cat.categories))))
-    df[col+'_code'] = df[col].apply(lambda x: int(encoder[col].get(x, -1)))
+    # Build dict mapping {category: index}
+    encoder[col] = {val: i for i, val in enumerate(df[col].cat.categories)}
+    df[col+'_code'] = df[col].apply(lambda x: encoder[col].get(x, -1))
 
 # ----------------------------------------
 # Convert timestamps and compute duration

@@ -352,7 +352,7 @@ if page == "📡 Real-Time Dashboard":
             txn_id = txn.get("transaction_id", "")
             txn_amount = txn.get("amount", "")
             customer = txn.get('customer_name', '')
-            received_at = txn.get('received_at', '')
+            reason = txn.get('reason', '')
 
             html_content += f"""
               <div class="alert-box">
@@ -361,7 +361,7 @@ if page == "📡 Real-Time Dashboard":
                       <strong>Txn ID:</strong> {txn_id}
                       <strong>Amount:</strong> {txn_amount}
                       <strong>Customer:</strong> {customer}
-                      <strong>DateTime:</strong> <em>{received_at}</em>
+                      <strong>Anomaly Reason:</strong> <em>{reason}</em>
                   </div>
 
                   <!-- Inline audio -->
